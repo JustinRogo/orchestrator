@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "ai-team-local"
+version = "0.1.0"
+description = "Local CLI coordinator for Codex, Claude Code, and Gemini CLI"
+requires-python = ">=3.11"
+dependencies = ["PyYAML>=6,<7"]
+
+[project.scripts]
+ai-team = "ai_team.cli:main"
+
+[tool.setuptools.packages.find]
+where = ["src"]

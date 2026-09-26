@@ -1,0 +1,6 @@
+codex:
+  role: implementation
+claude:
+  role: architecture and code review
+gemini:
+  role: independent QA

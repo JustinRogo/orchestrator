@@ -1,0 +1,8 @@
+.ai-team/config.yaml
+.ai-team/state.sqlite3
+.ai-team/logs/
+.ai-team/worktrees/
+*.pyc
+__pycache__/
+.pytest_cache/
+*.egg-info/
