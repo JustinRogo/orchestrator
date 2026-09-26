@@ -26,7 +26,7 @@ The initial conversation runs Codex, then Claude, then Gemini. Subsequent reques
 
 If a CLI process fails (for example, because a network proxy is unavailable), its turn stays queued and the task becomes `failed`. Run `ai-team retry <task-id>` after fixing the cause. `resume` is for tasks that are still running with queued turns.
 
-Claude Code 2.1.283 and Antigravity CLI 1.2.11 were found locally by absolute path, though this app session's PATH does not include their install directories. The end-to-end flow remains verified with simulated adapters. If you initialized this project before the Antigravity update, change the `gemini` entry in `.ai-team/config.yaml` to launch `agy`, remove `--approval-mode plan`, and set `format: antigravity-json`; the default now passes a response schema through `--json-schema` and selects the installed CLI's `--mode plan` for review. The default does not bypass permissions. Worktree change detection is an additional check, not a filesystem guarantee. See [the design and risk notes](docs/PLAN.md).
+If you initialized this project before the Antigravity update, change the `gemini` entry in `.ai-team/config.yaml` to launch `agy`, remove `--approval-mode plan`, and set `format: antigravity-json`; the default passes a response schema through `--json-schema` and selects `--mode plan` for review. For read-only QA, the orchestrator lists tracked files and asks Antigravity to inspect them with `view_file`, without shell commands or broader permissions. Tasks that genuinely require shell commands need scoped Antigravity allow rules. Worktree change detection is an additional check, not a filesystem guarantee. See [the design and risk notes](docs/PLAN.md).
 
 ## Development
 

@@ -118,6 +118,10 @@ class CLIAdapter:
                   "Do not run destructive Git commands or access files outside this worktree.\n")
         if self.settings["read_only"]:
             prompt += "You are a read-only reviewer. Do not edit files or run modifying commands.\n"
+        if self.name == "gemini" and self.settings["read_only"]:
+            prompt += ("Use view_file to inspect only the tracked paths listed in the context. "
+                       "Do not invoke run_command, terminal, shell, directory-listing, or other command tools. "
+                       "If a file read is denied, continue with available files and explain the limitation.\n")
         args = [part.replace("{prompt}", prompt).replace("{worktree}", str(worktree)) for part in self.settings["args"]]
         if self.settings["prompt_mode"] == "argument" and not any("{prompt}" in arg for arg in self.settings["args"]):
             raise ValueError(f"{self.name}: argument mode requires {{prompt}} in args")

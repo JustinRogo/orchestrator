@@ -34,6 +34,10 @@ class Coordinator:
                 parts.append(f"{name}:\n{path.read_text(encoding='utf-8')[:8000]}")
         messages = self.store.messages(task["id"])[-self.config["collaboration"]["recent_messages"]:]
         parts.append("Recent conversation:\n" + "\n".join(f"[{item['sender']} -> {item['recipient']}] {item['content']}" for item in messages))
+        if agent == "gemini" and self.config["agents"][agent]["read_only"]:
+            tracked = self.git.tracked_files(worktree)
+            parts.append("Tracked files available for read-only review (paths relative to this worktree):\n"
+                         + "\n".join(tracked[:100]))
         base = task["git_state"].get("base", "HEAD")
         diff = self.git.diff(worktree, base)
         if diff:

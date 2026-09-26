@@ -8,6 +8,7 @@ import tempfile
 import threading
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
 from ai_team.adapters import AgentResponse, CLIAdapter, filtered_environment, parse_response
 from ai_team.config import DEFAULT_CONFIG, initialize
@@ -95,6 +96,8 @@ class FlowTests(unittest.TestCase):
         self.assertEqual([agent for agent, _ in FakeAdapter.calls], ["codex", "claude", "gemini"])
         self.assertIn("found issue", FakeAdapter.calls[1][1])
         self.assertIn("reviewed issue", FakeAdapter.calls[2][1])
+        self.assertIn("Tracked files available for read-only review", FakeAdapter.calls[2][1])
+        self.assertIn("README.md", FakeAdapter.calls[2][1])
         self.assertEqual(len(coordinator.store.messages(task["id"])), 4)
         self.assertTrue((self.root / ".ai-team" / "logs" / f"{task['id']}.jsonl").exists())
         self.assertEqual(self.coordinator().store.get_task(task["id"])["turn_count"], 3)
@@ -279,6 +282,17 @@ class FlowTests(unittest.TestCase):
         response, detail = adapter.run("task", "context", [], self.root)
         self.assertEqual(detail["exit_code"], 0)
         self.assertEqual(response.message, "Ï checked it")
+
+    def test_antigravity_reviewer_avoids_headless_command_permissions(self):
+        settings = {"command": sys.executable, "args": ["-p", "{prompt}"], "role": "reviewer",
+                    "read_only": True, "prompt_mode": "argument", "format": "antigravity-json"}
+        adapter = CLIAdapter("gemini", settings, ["PATH", "SystemRoot"], 10)
+        result = subprocess.CompletedProcess([], 0, '{"status":"SUCCESS","response":"Reviewed"}', "")
+        with patch("ai_team.adapters.subprocess.run", return_value=result):
+            response, detail = adapter.run("Review files", "Tracked files: README.md", [], self.root)
+        self.assertEqual(response.message, "Reviewed")
+        self.assertIn("Use view_file", detail["prompt"])
+        self.assertIn("Do not invoke run_command", detail["prompt"])
 
 
 if __name__ == "__main__":

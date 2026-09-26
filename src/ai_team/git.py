@@ -49,6 +49,10 @@ class GitWorkspaceManager:
         self.verify(path)
         return self._git("status", "--short", cwd=path)
 
+    def tracked_files(self, path: Path) -> list[str]:
+        self.verify(path)
+        return self._git("ls-files", cwd=path).splitlines()
+
     def diff(self, path: Path, base: str = "HEAD") -> str:
         self.verify(path)
         if not re.fullmatch(r"[a-f0-9]{40,64}|HEAD", base):
