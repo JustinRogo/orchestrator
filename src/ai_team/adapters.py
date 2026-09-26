@@ -124,7 +124,8 @@ class CLIAdapter:
         env = filtered_environment(self.allowed_environment)
         start = time.monotonic()
         result = subprocess.run([executable, *args], input=prompt if self.settings["prompt_mode"] == "stdin" else None,
-                                cwd=worktree, env=env, text=True, capture_output=True, timeout=self.timeout, shell=False)
+                                cwd=worktree, env=env, text=True, encoding="utf-8", errors="replace",
+                                capture_output=True, timeout=self.timeout, shell=False)
         elapsed = time.monotonic() - start
         response = parse_response(self.name, result.stdout, self.settings["format"])
         detail = {"prompt": prompt, "exit_code": result.returncode, "duration_seconds": elapsed,

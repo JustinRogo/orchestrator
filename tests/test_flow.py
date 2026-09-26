@@ -1,13 +1,15 @@
 from __future__ import annotations
 
 import copy
+import json
 import subprocess
+import sys
 import tempfile
 import threading
 import unittest
 from pathlib import Path
 
-from ai_team.adapters import AgentResponse, filtered_environment, parse_response
+from ai_team.adapters import AgentResponse, CLIAdapter, filtered_environment, parse_response
 from ai_team.config import DEFAULT_CONFIG, initialize
 from ai_team.coordinator import Coordinator
 
@@ -266,6 +268,17 @@ class FlowTests(unittest.TestCase):
         source = {"SYSTEMROOT": "C:\\Windows", "HTTPS_PROXY": "http://proxy.invalid", "SECRET": "hidden"}
         result = filtered_environment(["SystemRoot", "https_proxy"], source)
         self.assertEqual(result, {"SYSTEMROOT": "C:\\Windows", "HTTPS_PROXY": "http://proxy.invalid"})
+
+    def test_cli_output_is_decoded_as_utf8(self):
+        event = {"type": "item.completed", "item": {"type": "agent_message", "text": '{"message":"Ï checked it"}'}}
+        output = (json.dumps(event, ensure_ascii=False) + "\n").encode("utf-8")
+        code = f"import sys; sys.stdout.buffer.write({output!r})"
+        settings = {"command": sys.executable, "args": ["-c", code], "role": "reviewer",
+                    "read_only": False, "prompt_mode": "stdin", "format": "codex-jsonl"}
+        adapter = CLIAdapter("codex", settings, ["PATH", "SystemRoot"], 10)
+        response, detail = adapter.run("task", "context", [], self.root)
+        self.assertEqual(detail["exit_code"], 0)
+        self.assertEqual(response.message, "Ï checked it")
 
 
 if __name__ == "__main__":
