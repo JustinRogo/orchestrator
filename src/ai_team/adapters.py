@@ -52,6 +52,18 @@ def parse_response(agent: str, raw: str, output_format: str) -> AgentResponse:
                 payload = event["item"].get("text", "")
             if event.get("type") == "turn.completed":
                 usage = event.get("usage", {})
+    elif output_format == "antigravity-json":
+        envelope = _structured(raw)
+        if envelope is None:
+            return AgentResponse(agent, "Invalid Antigravity JSON response", status="blocked", raw_output=raw)
+        usage = envelope.get("usage") or {}
+        run_status = str(envelope.get("status", "")).upper()
+        if run_status != "SUCCESS":
+            reason = envelope.get("error") or envelope.get("response") or f"run status {run_status or 'missing'}"
+            return AgentResponse(agent, f"Antigravity run failed: {reason}", status="blocked", raw_output=raw, usage=usage)
+        payload = envelope.get("structured_output") or envelope.get("response", "")
+        if not payload:
+            return AgentResponse(agent, "Antigravity returned no response", status="blocked", raw_output=raw, usage=usage)
     else:
         payload = _structured(raw)
         if isinstance(payload, dict):
@@ -118,8 +130,8 @@ class ClaudeAdapter(CLIAdapter):
     pass
 
 
-class GeminiAdapter(CLIAdapter):
+class AntigravityAdapter(CLIAdapter):
     pass
 
 
-ADAPTERS = {"codex": CodexAdapter, "claude": ClaudeAdapter, "gemini": GeminiAdapter}
+ADAPTERS = {"codex": CodexAdapter, "claude": ClaudeAdapter, "gemini": AntigravityAdapter}

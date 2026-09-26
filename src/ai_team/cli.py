@@ -42,7 +42,7 @@ def main(argv: list[str] | None = None) -> int:
             config = load(root)
             print(f"Initialized {path}")
             for agent, found in available_agents(config).items():
-                print(f"{agent}: {'found' if found else 'missing; configure or install before start'}")
+                print(f"{agent} ({config['agents'][agent]['command']}): {'found' if found else 'missing; configure or install before start'}")
             return 0
         config = load(root)
         coordinator = Coordinator(root, config)
@@ -55,7 +55,8 @@ def main(argv: list[str] | None = None) -> int:
                 roles[name] = role.strip()
             missing = [name for name, found in available_agents(config).items() if not found]
             if missing:
-                raise ValueError(f"Required CLIs missing: {', '.join(missing)}. Edit .ai-team/config.yaml to disable or configure them.")
+                labels = [f"{name} ({config['agents'][name]['command']})" for name in missing]
+                raise ValueError(f"Required CLIs missing: {', '.join(labels)}. Edit .ai-team/config.yaml to disable or configure them.")
             task = coordinator.start(args.prompt, roles)
             show_chat(coordinator, task["id"])
         elif args.command == "status":

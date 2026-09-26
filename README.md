@@ -1,6 +1,6 @@
 # AI Team
 
-A local Python CLI that coordinates Codex, Claude Code, and Gemini CLI across separate Git worktrees. It persists conversations in SQLite, passes findings between agents, supports bounded delegation, and leaves all merges to the human.
+A local Python CLI that coordinates Codex, Claude Code, and Google Antigravity CLI across separate Git worktrees. It persists conversations in SQLite, passes findings between agents, supports bounded delegation, and leaves all merges to the human. The Google agent retains the internal name `gemini`, including `@gemini` delegation, while launching Antigravity's `agy` command.
 
 ## Quick start
 
@@ -20,7 +20,7 @@ ai-team review <task-id>
 
 The initial conversation runs Codex, then Claude, then Gemini. Subsequent requests use structured `delegate_to`/`delegated_task` fields or a leading `@agent` message line. Max turns, rounds, repeated requests, and empty delegation tasks are guarded. A blocked response or exhausted queue requiring a decision moves the task to `awaiting_human`. There is no automatic merge command.
 
-Claude Code and Gemini CLI were unavailable on the development machine, so the end-to-end flow was verified with simulated adapters. Check their flags and permission modes on your installations before a live run. See [the design and risk notes](docs/PLAN.md).
+Claude Code and Antigravity CLI were unavailable on the development machine, so the end-to-end flow was verified with simulated adapters. If you initialized this project before the Antigravity update, change the `gemini` entry in `.ai-team/config.yaml` to `command: agy`, remove `--approval-mode plan` from its `args`, and set `format: antigravity-json`; the default now also passes a response schema through `--json-schema`. The default does not bypass Antigravity permissions. Its read-only reviewer role is an instruction with worktree change detection, not a filesystem guarantee. See [the design and risk notes](docs/PLAN.md).
 
 ## Development
 

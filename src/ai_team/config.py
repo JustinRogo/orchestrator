@@ -1,11 +1,24 @@
 from __future__ import annotations
 
 import copy
+import json
 import shutil
 from pathlib import Path
 from typing import Any
 
 import yaml
+
+
+AGY_RESPONSE_SCHEMA = json.dumps({
+    "type": "object",
+    "properties": {
+        "message": {"type": "string"},
+        "status": {"type": "string", "enum": ["working", "complete", "blocked", "disagree"]},
+        "delegate_to": {"type": "string", "enum": ["codex", "claude", "gemini", "all"]},
+        "delegated_task": {"type": "string"},
+    },
+    "required": ["message", "status"],
+})
 
 
 DEFAULT_CONFIG: dict[str, Any] = {
@@ -17,8 +30,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
                    "command": "claude", "args": ["-p", "--output-format", "json", "--permission-mode", "plan"],
                    "format": "claude-json", "prompt_mode": "stdin"},
         "gemini": {"enabled": True, "role": "independent QA", "read_only": True,
-                   "command": "gemini", "args": ["-p", "{prompt}", "--output-format", "json", "--approval-mode", "plan"],
-                   "format": "gemini-json", "prompt_mode": "argument"},
+                   "command": "agy", "args": ["-p", "{prompt}", "--output-format", "json", "--json-schema", AGY_RESPONSE_SCHEMA],
+                   "format": "antigravity-json", "prompt_mode": "argument"},
     },
     "collaboration": {"max_turns": 12, "max_rounds": 3, "allow_agent_delegation": True,
                       "recent_messages": 8, "timeout_seconds": 600},

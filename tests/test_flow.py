@@ -90,6 +90,17 @@ class FlowTests(unittest.TestCase):
         response = parse_response("gemini", '{"response":"@claude Please review the diff"}', "gemini-json")
         self.assertEqual((response.requested_agent, response.requested_task), ("claude", "Please review the diff"))
 
+    def test_antigravity_envelope_and_terminal_failure(self):
+        response = parse_response("gemini", '{"status":"SUCCESS","response":"{\\"message\\":\\"Verified\\",\\"delegate_to\\":\\"codex\\",\\"delegated_task\\":\\"Check case\\"}","usage":{"total_tokens":14}}', "antigravity-json")
+        self.assertEqual(response.message, "Verified")
+        self.assertEqual(response.requested_agent, "codex")
+        self.assertEqual(response.usage["total_tokens"], 14)
+        response = parse_response("gemini", '{"status":"ERROR","error":"authentication required","response":""}', "antigravity-json")
+        self.assertEqual(response.status, "blocked")
+        self.assertIn("authentication required", response.message)
+        response = parse_response("gemini", '{"status":"SUCCESS","response":"ignored","structured_output":{"message":"Checked","status":"complete"}}', "antigravity-json")
+        self.assertEqual((response.message, response.status), ("Checked", "complete"))
+
 
 if __name__ == "__main__":
     unittest.main()
