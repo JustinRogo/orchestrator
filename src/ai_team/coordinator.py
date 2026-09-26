@@ -59,7 +59,7 @@ class Coordinator:
 
     def resume(self, task_id: str) -> dict[str, Any]:
         task = self.store.get_task(task_id)
-        if task["status"] in {"stopped", "complete", "awaiting_human"}:
+        if task["status"] in {"stopped", "complete", "awaiting_human", "failed"}:
             return task
         max_turns = self.config["collaboration"]["max_turns"]
         while task["queue"] and task["turn_count"] < max_turns:
@@ -99,6 +99,10 @@ class Coordinator:
                     response.tests_run = [{"error": str(error)}]
             self._record(task, response, detail, before, after)
             task["turn_count"] += 1
+            if detail["exit_code"] != 0:
+                task["queue"].insert(0, item)
+                task["status"] = "failed"
+                break
             if response.status in {"blocked", "disagree"}:
                 task["status"] = "awaiting_human"
                 break
@@ -156,3 +160,19 @@ class Coordinator:
         task["status"] = "stopped"
         self.store.save_task(task)
         return task
+
+    def retry_failed(self, task_id: str) -> dict[str, Any]:
+        task = self.store.get_task(task_id)
+        if task["status"] not in {"failed", "awaiting_human"}:
+            raise ValueError("Task is not stopped on a failed CLI invocation")
+        invocation = self.store.db.execute(
+            "SELECT agent, exit_code FROM invocations WHERE task_id=? ORDER BY rowid DESC LIMIT 1", (task_id,)
+        ).fetchone()
+        if invocation is None or invocation["exit_code"] == 0:
+            raise ValueError("Most recent invocation was not a CLI failure")
+        if not task["queue"] or task["queue"][0]["agent"] != invocation["agent"]:
+            task["queue"].insert(0, {"agent": invocation["agent"], "task": task["original_prompt"],
+                                      "source": "retry", "round": task["current_round"]})
+        task["status"] = "running"
+        self.store.save_task(task)
+        return self.resume(task_id)

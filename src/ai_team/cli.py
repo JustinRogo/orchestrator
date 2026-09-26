@@ -18,7 +18,7 @@ def parser() -> argparse.ArgumentParser:
     start.add_argument("prompt")
     start.add_argument("--role", action="append", default=[], metavar="AGENT=ROLE")
     sub.add_parser("status")
-    for name in ("chat", "resume", "diff", "review", "stop", "cleanup"):
+    for name in ("chat", "resume", "retry", "diff", "review", "stop", "cleanup"):
         command = sub.add_parser(name)
         command.add_argument("task_id")
     return app
@@ -31,6 +31,8 @@ def show_chat(coordinator: Coordinator, task_id: str) -> None:
         print(f"\n[{message['sender'].upper()} → {message['recipient'].upper() if message['recipient'] else 'ALL'}]\n{message['content']}")
     if task["status"] == "awaiting_human":
         print("\nHUMAN DECISION REQUIRED: inspect the conversation and worktree diffs.")
+    elif task["status"] == "failed":
+        print(f"\nCLI invocation failed. Retry with: ai-team retry {task_id}")
 
 
 def main(argv: list[str] | None = None) -> int:
@@ -66,6 +68,9 @@ def main(argv: list[str] | None = None) -> int:
             show_chat(coordinator, args.task_id)
         elif args.command == "resume":
             coordinator.resume(args.task_id)
+            show_chat(coordinator, args.task_id)
+        elif args.command == "retry":
+            coordinator.retry_failed(args.task_id)
             show_chat(coordinator, args.task_id)
         elif args.command == "diff":
             task = coordinator.store.get_task(args.task_id)

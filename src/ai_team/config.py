@@ -36,7 +36,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "collaboration": {"max_turns": 12, "max_rounds": 3, "allow_agent_delegation": True,
                       "recent_messages": 8, "timeout_seconds": 600},
     "git": {"primary_implementation_agent": "codex", "auto_merge": False},
-    "execution": {"tests": [], "allowed_environment": ["PATH", "PATHEXT", "SystemRoot", "WINDIR", "TEMP", "TMP", "HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "GEMINI_CLI_HOME"]},
+    "execution": {"tests": [], "allowed_environment": ["PATH", "PATHEXT", "SystemRoot", "WINDIR", "TEMP", "TMP", "HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "GEMINI_CLI_HOME", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "all_proxy", "no_proxy", "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "NODE_EXTRA_CA_CERTS"]},
 }
 
 

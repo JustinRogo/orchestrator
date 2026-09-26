@@ -6,7 +6,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from ai_team.adapters import AgentResponse, parse_response
+from ai_team.adapters import AgentResponse, filtered_environment, parse_response
 from ai_team.config import DEFAULT_CONFIG, initialize
 from ai_team.coordinator import Coordinator
 
@@ -28,6 +28,19 @@ class FakeAdapter:
         response = self.scripted[self.name].pop(0)
         return response, {"prompt": context, "exit_code": 0, "duration_seconds": 0.01,
                           "stderr": "", "raw_output": response.message}
+
+
+class FailOnceAdapter(FakeAdapter):
+    failed = False
+
+    def run(self, task, context, history, worktree):
+        if self.name == "codex" and not self.failed:
+            FailOnceAdapter.failed = True
+            self.calls.append((self.name, context))
+            return AgentResponse("codex", "Connection failed", status="blocked"), {
+                "prompt": context, "exit_code": 1, "duration_seconds": 0.01,
+                "stderr": "Connection failed", "raw_output": ""}
+        return super().run(task, context, history, worktree)
 
 
 class FlowTests(unittest.TestCase):
@@ -100,6 +113,48 @@ class FlowTests(unittest.TestCase):
         self.assertIn("authentication required", response.message)
         response = parse_response("gemini", '{"status":"SUCCESS","response":"ignored","structured_output":{"message":"Checked","status":"complete"}}', "antigravity-json")
         self.assertEqual((response.message, response.status), ("Checked", "complete"))
+
+    def test_failed_cli_turn_can_retry_without_losing_queue(self):
+        FailOnceAdapter.failed = False
+        FakeAdapter.scripted = {
+            "codex": [AgentResponse("codex", "Finding", status="complete")],
+            "claude": [AgentResponse("claude", "Review", status="complete")],
+            "gemini": [AgentResponse("gemini", "QA", status="complete")],
+        }
+        coordinator = Coordinator(self.root, self.config, FailOnceAdapter)
+        self.coordinators = getattr(self, "coordinators", []) + [coordinator]
+        task = coordinator.start("Inspect parser")
+        self.assertEqual(task["status"], "failed")
+        self.assertEqual([item["agent"] for item in task["queue"]], ["codex", "claude", "gemini"])
+        task = coordinator.retry_failed(task["id"])
+        self.assertEqual(task["status"], "complete")
+        self.assertEqual([agent for agent, _ in FakeAdapter.calls], ["codex", "codex", "claude", "gemini"])
+
+    def test_retry_recovers_old_failed_task(self):
+        FailOnceAdapter.failed = False
+        FakeAdapter.scripted = {
+            "codex": [AgentResponse("codex", "Finding", status="complete")],
+            "claude": [AgentResponse("claude", "Review", status="complete")],
+            "gemini": [AgentResponse("gemini", "QA", status="complete")],
+        }
+        coordinator = Coordinator(self.root, self.config, FailOnceAdapter)
+        self.coordinators = getattr(self, "coordinators", []) + [coordinator]
+        task = coordinator.start("Inspect parser")
+        task["status"] = "awaiting_human"
+        task["queue"].pop(0)
+        coordinator.store.save_task(task)
+        task = coordinator.retry_failed(task["id"])
+        self.assertEqual(task["status"], "complete")
+        self.assertEqual([agent for agent, _ in FakeAdapter.calls], ["codex", "codex", "claude", "gemini"])
+
+    def test_proxy_variables_are_in_allowlist(self):
+        self.assertIn("HTTPS_PROXY", self.config["execution"]["allowed_environment"])
+        self.assertIn("NO_PROXY", self.config["execution"]["allowed_environment"])
+
+    def test_environment_allowlist_matches_windows_case(self):
+        source = {"SYSTEMROOT": "C:\\Windows", "HTTPS_PROXY": "http://proxy.invalid", "SECRET": "hidden"}
+        result = filtered_environment(["SystemRoot", "https_proxy"], source)
+        self.assertEqual(result, {"SYSTEMROOT": "C:\\Windows", "HTTPS_PROXY": "http://proxy.invalid"})
 
 
 if __name__ == "__main__":

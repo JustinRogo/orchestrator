@@ -40,6 +40,12 @@ def _structured(text: str) -> dict[str, Any] | None:
     return value if isinstance(value, dict) else None
 
 
+def filtered_environment(allowed: list[str], source: dict[str, str] | None = None) -> dict[str, str]:
+    names = {name.upper() for name in allowed}
+    environment = os.environ if source is None else source
+    return {key: value for key, value in environment.items() if key.upper() in names}
+
+
 def parse_response(agent: str, raw: str, output_format: str) -> AgentResponse:
     payload: Any = None
     usage: dict[str, Any] = {}
@@ -108,7 +114,7 @@ class CLIAdapter:
         args = [part.replace("{prompt}", prompt).replace("{worktree}", str(worktree)) for part in self.settings["args"]]
         if self.settings["prompt_mode"] == "argument" and not any("{prompt}" in arg for arg in self.settings["args"]):
             raise ValueError(f"{self.name}: argument mode requires {{prompt}} in args")
-        env = {key: value for key, value in os.environ.items() if key in self.allowed_environment}
+        env = filtered_environment(self.allowed_environment)
         start = time.monotonic()
         result = subprocess.run([executable, *args], input=prompt if self.settings["prompt_mode"] == "stdin" else None,
                                 cwd=worktree, env=env, text=True, capture_output=True, timeout=self.timeout, shell=False)
