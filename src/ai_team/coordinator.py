@@ -50,18 +50,22 @@ class Coordinator:
         return "\n\n".join(parts)
 
     def start(self, prompt: str, roles: dict[str, str] | None = None) -> dict[str, Any]:
+        task = self.create(prompt, roles)
+        return self.resume(task["id"])
+
+    def create(self, prompt: str, roles: dict[str, str] | None = None) -> dict[str, Any]:
         if not prompt.strip():
             raise ValueError("Task prompt must not be empty")
         task = self.store.create_task(prompt, self.config, roles)
         task["git_state"]["base"] = self.git.head()
         self.store.save_task(task)
-        return self.resume(task["id"])
+        return task
 
     def resume(self, task_id: str) -> dict[str, Any]:
         task = self.store.get_task(task_id)
         if task["status"] in {"stopped", "complete", "awaiting_human", "failed"}:
             return task
-        max_turns = self.config["collaboration"]["max_turns"]
+        max_turns = self.config["collaboration"]["max_turns"] + task["git_state"].get("extra_turns", 0)
         while task["queue"] and task["turn_count"] < max_turns:
             if self.store.get_task(task_id)["status"] == "stopped":
                 task["status"] = "stopped"
@@ -69,6 +73,7 @@ class Coordinator:
             item = task["queue"].pop(0)
             agent = item["agent"]
             if item["round"] > task["max_rounds"]:
+                task["queue"].insert(0, item)
                 task["status"] = "awaiting_human"
                 break
             task["current_round"] = item["round"]
@@ -99,6 +104,9 @@ class Coordinator:
                     response.tests_run = [{"error": str(error)}]
             self._record(task, response, detail, before, after)
             task["turn_count"] += 1
+            if self.store.get_task(task_id)["status"] == "stopped":
+                task["status"] = "stopped"
+                break
             if detail["exit_code"] != 0:
                 task["queue"].insert(0, item)
                 task["status"] = "failed"
@@ -158,6 +166,27 @@ class Coordinator:
     def stop(self, task_id: str) -> dict[str, Any]:
         task = self.store.get_task(task_id)
         task["status"] = "stopped"
+        self.store.save_task(task)
+        return task
+
+    def guide(self, task_id: str, message: str, recipient: str = "all") -> dict[str, Any]:
+        task = self.store.get_task(task_id)
+        if task["status"] != "awaiting_human":
+            raise ValueError("Task is not waiting for human guidance")
+        if not isinstance(message, str) or not message.strip() or len(message) > 20_000:
+            raise ValueError("Enter guidance of at most 20,000 characters")
+        enabled = [name for name, settings in self.config["agents"].items() if settings["enabled"]]
+        if recipient != "all" and recipient not in enabled:
+            raise ValueError("Choose an enabled agent or the whole team")
+        recipients = enabled if recipient == "all" else [recipient]
+        next_round = task["current_round"] + 1
+        task["max_rounds"] = max(task["max_rounds"], next_round,
+                                 *(item["round"] for item in task["queue"]))
+        task["git_state"]["extra_turns"] = task["git_state"].get("extra_turns", 0) + len(recipients)
+        task["queue"] = ([{"agent": name, "task": message.strip(), "source": "human", "round": next_round}
+                          for name in recipients] + task["queue"])
+        task["status"] = "running"
+        self.store.add_message(task_id, "human", recipient, message.strip())
         self.store.save_task(task)
         return task
 

@@ -33,8 +33,12 @@ def parse_delegation(message: str) -> tuple[str | None, str | None]:
 
 
 def _structured(text: str) -> dict[str, Any] | None:
+    candidate = text.strip()
+    lines = candidate.splitlines()
+    if len(lines) >= 3 and lines[0].strip().lower() in {"```json", "```"} and lines[-1].strip() == "```":
+        candidate = "\n".join(lines[1:-1]).strip()
     try:
-        value = json.loads(text.strip())
+        value = json.loads(candidate)
     except (ValueError, TypeError):
         return None
     return value if isinstance(value, dict) else None
@@ -69,7 +73,10 @@ def parse_response(agent: str, raw: str, output_format: str) -> AgentResponse:
             return AgentResponse(agent, f"Antigravity run failed: {reason}", status="blocked", raw_output=raw, usage=usage)
         payload = envelope.get("structured_output") or envelope.get("response", "")
         if not payload:
-            return AgentResponse(agent, "Antigravity returned no response", status="blocked", raw_output=raw, usage=usage)
+            denied = envelope.get("denied_actions") or []
+            names = ", ".join(str(item.get("action", "tool")) for item in denied if isinstance(item, dict))
+            reason = f"required {names} permission was denied" if names else "the CLI returned no response"
+            return AgentResponse(agent, f"Antigravity could not answer: {reason}", status="blocked", raw_output=raw, usage=usage)
     else:
         payload = _structured(raw)
         if isinstance(payload, dict):

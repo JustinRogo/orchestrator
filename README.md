@@ -16,6 +16,10 @@ ai-team diff <task-id>
 ai-team review <task-id>
 ```
 
+## Browser interface
+
+From the repository, run `ai-team ui` to open the local dashboard. Without an editable install, use `$env:PYTHONPATH = "src"` followed by `python -m ai_team ui`. The server binds only to `127.0.0.1` on port 8765 and opens your default browser. Use `--port 0` to choose an available port or `--no-browser` to print the address without opening a tab. Press Ctrl+C to stop the interface. The dashboard shows tasks, the conversation, changed files, diffs, and test results; it can start, resume, retry, and stop tasks. When a task needs a decision, use the guidance box to send your next instruction to one agent or the whole team. Stop takes effect after the current agent call.
+
 `init` creates `.ai-team/config.yaml` and editable context files. Edit the command paths and flags there to match your installed CLI versions. `start --role codex="..."` overrides an agent's role for one task. Use `ai-team resume <task-id>` for a persisted queued task; `stop` halts it; `cleanup` removes only clean worktrees and preserves task history. `--project PATH` targets another Git repository.
 
 The initial conversation runs Codex, then Claude, then Gemini. Subsequent requests use structured `delegate_to`/`delegated_task` fields or a leading `@agent` message line. Max turns, rounds, repeated requests, and empty delegation tasks are guarded. A blocked response or exhausted queue requiring a decision moves the task to `awaiting_human`. There is no automatic merge command.

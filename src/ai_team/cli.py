@@ -14,6 +14,9 @@ def parser() -> argparse.ArgumentParser:
     app.add_argument("--project", type=Path, default=Path.cwd(), help="Git repository root")
     sub = app.add_subparsers(dest="command", required=True)
     sub.add_parser("init")
+    ui = sub.add_parser("ui", help="Open the local browser interface")
+    ui.add_argument("--port", type=int, default=8765)
+    ui.add_argument("--no-browser", action="store_true")
     start = sub.add_parser("start")
     start.add_argument("prompt")
     start.add_argument("--role", action="append", default=[], metavar="AGENT=ROLE")
@@ -49,6 +52,10 @@ def main(argv: list[str] | None = None) -> int:
                 print(f"{agent} ({config['agents'][agent]['command']}): {'found' if found else 'missing; configure or install before start'}")
             return 0
         config = load(root)
+        if args.command == "ui":
+            from .server import run_ui
+            run_ui(root, args.port, not args.no_browser)
+            return 0
         coordinator = Coordinator(root, config)
         if args.command == "start":
             roles = {}

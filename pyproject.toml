@@ -14,3 +14,6 @@ ai-team = "ai_team.cli:main"
 
 [tool.setuptools.packages.find]
 where = ["src"]
+
+[tool.setuptools.package-data]
+ai_team = ["web/*.html"]

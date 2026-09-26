@@ -1,0 +1,305 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>AI Team</title>
+  <style>
+    :root { color-scheme: dark; font-family: Inter, Segoe UI, system-ui, sans-serif; background: #0b1018; color: #e9edf4; }
+    * { box-sizing: border-box; }
+    body { margin: 0; min-height: 100vh; }
+    button, textarea { font: inherit; }
+    button { cursor: pointer; }
+    button:disabled { opacity: .48; cursor: not-allowed; }
+    .app { display: grid; grid-template-columns: 270px minmax(400px, 1fr) 360px; min-height: 100vh; }
+    .sidebar { background: #111925; border-right: 1px solid #283347; padding: 24px 16px; display: flex; flex-direction: column; gap: 24px; }
+    .brand { display: flex; align-items: center; gap: 11px; padding: 0 8px; font-size: 19px; font-weight: 750; letter-spacing: -.03em; }
+    .brand-mark { width: 31px; height: 31px; border-radius: 9px; display: grid; place-items: center; background: #d5f78d; color: #19250b; font-weight: 900; font-size: 16px; }
+    .section-label { color: #91a2ba; font-size: 11px; letter-spacing: .12em; text-transform: uppercase; font-weight: 700; margin: 0 8px 10px; }
+    .task-list { display: flex; flex-direction: column; gap: 5px; max-height: 52vh; overflow: auto; }
+    .task-item { width: 100%; text-align: left; border: 1px solid transparent; border-radius: 12px; background: transparent; color: #d9e1ef; padding: 12px; }
+    .task-item:hover { background: #1a2738; }
+    .task-item.selected { background: #203147; border-color: #45617b; }
+    .task-title { display: block; font-size: 13px; font-weight: 650; line-height: 1.35; margin-bottom: 7px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    .task-meta { color: #9aabc2; font-size: 11px; display: flex; justify-content: space-between; gap: 6px; }
+    .agents { margin-top: auto; border-top: 1px solid #283347; padding-top: 20px; }
+    .agent-row { display: flex; justify-content: space-between; color: #c8d2e2; font-size: 13px; padding: 8px; }
+    .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 7px; background: #63748b; }
+    .dot.ready { background: #b4e27e; box-shadow: 0 0 10px #b4e27e66; }
+    .main { min-width: 0; display: flex; flex-direction: column; }
+    .topbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; border-bottom: 1px solid #283347; padding: 19px 28px; background: #0e1621; }
+    .topbar-title { margin: 0; font-size: 14px; font-weight: 650; color: #dae5f3; }
+    .local-tag { border: 1px solid #46655c; color: #a7dec8; border-radius: 999px; font-size: 11px; padding: 5px 9px; white-space: nowrap; }
+    .content { flex: 1; min-height: 0; padding: 28px; }
+    .hero { display: flex; justify-content: space-between; align-items: start; gap: 16px; margin-bottom: 25px; }
+    h1 { font-size: 25px; letter-spacing: -.035em; line-height: 1.2; margin: 0 0 8px; }
+    .subtitle { color: #94a7be; font-size: 13px; margin: 0; }
+    .status { border-radius: 999px; padding: 7px 10px; font-size: 11px; font-weight: 750; text-transform: uppercase; letter-spacing: .06em; background: #263348; color: #bdcae0; white-space: nowrap; }
+    .status.running { background: #2d3b22; color: #c1e793; }
+    .status.failed, .status.awaiting_human { background: #4b2e2b; color: #ffb6aa; }
+    .status.complete { background: #224036; color: #a3e2c2; }
+    .status.review_ready { background: #2e3851; color: #c5d2ff; }
+    .actions { display: flex; gap: 9px; margin-bottom: 24px; }
+    .button { border: 1px solid #43546b; background: #1a2738; color: #e4edf8; border-radius: 9px; padding: 9px 13px; font-size: 12px; font-weight: 650; }
+    .button:hover:not(:disabled) { background: #283b50; }
+    .button.primary { background: #d5f78d; color: #18230b; border-color: #d5f78d; }
+    .button.primary:hover:not(:disabled) { background: #e2ffa9; }
+    .button.danger { border-color: #744a49; color: #ffbeb9; }
+    .conversation { display: flex; flex-direction: column; gap: 18px; padding-bottom: 24px; }
+    .message { display: grid; grid-template-columns: 36px 1fr; gap: 12px; }
+    .avatar { width: 36px; height: 36px; border-radius: 11px; display: grid; place-items: center; font-size: 12px; font-weight: 800; color: #10161e; }
+    .avatar.codex { background: #b7edbb; }.avatar.claude { background: #e8b59f; }.avatar.gemini { background: #aac8fa; }.avatar.human { background: #e2d6fc; }.avatar.system { background: #ffc9a5; }
+    .message-body { min-width: 0; border: 1px solid #273449; border-radius: 13px; background: #131e2c; padding: 13px 16px 15px; }
+    .message-head { display: flex; align-items: center; gap: 10px; margin-bottom: 9px; }
+    .sender { font-size: 12px; font-weight: 750; text-transform: uppercase; letter-spacing: .06em; }
+    .recipient, .time { color: #8194ac; font-size: 11px; }
+    .time { margin-left: auto; }
+    .message-text { margin: 0; font: 12.5px/1.65 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; color: #d4deec; }
+    .empty { color: #9eb0c5; border: 1px dashed #3b4b61; border-radius: 13px; padding: 26px; font-size: 13px; }
+    .compose { border-top: 1px solid #283347; padding: 18px 28px 24px; background: #101925; }
+    .compose label { display: block; font-size: 12px; font-weight: 700; margin-bottom: 9px; }
+    textarea { width: 100%; min-height: 76px; max-height: 220px; resize: vertical; background: #0b1420; border: 1px solid #3a4b62; border-radius: 10px; color: #e8f1fb; padding: 12px; font-size: 13px; outline: none; }
+    select { background: #0b1420; border: 1px solid #3a4b62; border-radius: 9px; color: #e8f1fb; padding: 9px; }
+    .guidance { margin: 16px 0; border: 1px solid #715c42; border-radius: 12px; background: #24241f; padding: 15px; }
+    .guidance label { display: block; font-size: 13px; font-weight: 700; margin-bottom: 9px; }
+    .guidance textarea { min-height: 65px; }
+    .guidance-controls { display: flex; justify-content: space-between; gap: 10px; margin-top: 10px; }
+    textarea:focus { border-color: #b7d77d; box-shadow: 0 0 0 2px #b7d77d22; }
+    .compose-footer { display: flex; align-items: center; justify-content: space-between; gap: 16px; margin-top: 9px; }
+    .hint { color: #8194ac; font-size: 11px; }
+    .inspector { min-width: 0; border-left: 1px solid #283347; background: #101925; padding: 24px 18px; }
+    .inspector h2 { font-size: 14px; margin: 0 0 17px; }
+    .card { border: 1px solid #2b394d; border-radius: 12px; background: #152131; margin-bottom: 15px; padding: 15px; }
+    .card h3 { font-size: 11px; color: #98abc2; text-transform: uppercase; letter-spacing: .1em; margin: 0 0 10px; }
+    .info-row { display: flex; justify-content: space-between; gap: 14px; font-size: 12px; padding: 5px 0; }
+    .info-row span:first-child { color: #92a5bc; }
+    .value { color: #e1eaf5; text-align: right; overflow-wrap: anywhere; }
+    .file-list { list-style: none; margin: 0; padding: 0; max-height: 150px; overflow: auto; }
+    .file-list li { color: #cbd7e6; font: 11px/1.5 ui-monospace, Consolas, monospace; padding: 3px 0; overflow-wrap: anywhere; }
+    .segmented { display: flex; gap: 4px; background: #0d1723; padding: 4px; border-radius: 8px; margin-bottom: 10px; }
+    .segmented button { flex: 1; border: 0; border-radius: 6px; background: transparent; color: #9aabc0; font-size: 11px; padding: 7px 4px; }
+    .segmented button.active { color: #e9f2fc; background: #304058; }
+    .diff { color: #bacadd; font: 11px/1.55 ui-monospace, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; max-height: 300px; overflow: auto; margin: 0; }
+    .notice { color: #a5b7cb; font-size: 12px; line-height: 1.5; }
+    .toast { position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%); background: #4c2b2b; color: #fff1ef; border: 1px solid #b76a63; border-radius: 9px; padding: 11px 16px; box-shadow: 0 12px 40px #0008; font-size: 12px; z-index: 10; max-width: 90vw; }
+    .hidden { display: none !important; }
+    @media (max-width: 1150px) { .app { grid-template-columns: 230px 1fr; }.inspector { grid-column: 2; border-left: 0; border-top: 1px solid #283347; } }
+    @media (max-width: 700px) { .app { display: block; }.sidebar { padding: 15px; gap: 12px; }.task-list { max-height: 140px; }.agents { margin-top: 0; }.main { min-height: 65vh; }.content { padding: 20px 15px; }.compose { padding: 15px; }.inspector { padding: 18px 15px; }.topbar { padding: 15px; } }
+  </style>
+</head>
+<body>
+  <div class="app">
+    <aside class="sidebar">
+      <div class="brand"><span class="brand-mark">A</span><span>AI Team</span></div>
+      <section><div class="section-label">Tasks</div><div id="task-list" class="task-list"></div></section>
+      <section class="agents"><div class="section-label">Agents</div><div id="agents"></div></section>
+    </aside>
+    <main class="main">
+      <div class="topbar"><p class="topbar-title">Team workspace</p><span class="local-tag">● Local session</span></div>
+      <div class="content">
+        <div class="hero"><div><h1 id="title">Choose a task</h1><p class="subtitle" id="subtitle">Your agents' conversation appears here.</p></div><span id="status" class="status hidden"></span></div>
+        <div id="actions" class="actions hidden"><button id="retry" class="button">Retry failed turn</button><button id="resume" class="button">Resume</button><button id="stop" class="button danger">Stop after current turn</button><button id="refresh" class="button">Refresh</button></div>
+        <div id="guidance" class="guidance hidden"><label for="guidance-message">This task needs your direction</label><textarea id="guidance-message" placeholder="Tell the team what to do next..."></textarea><div class="guidance-controls"><select id="guidance-recipient" aria-label="Send guidance to"><option value="all">Whole team</option><option value="codex">Codex</option><option value="claude">Claude</option><option value="gemini">Antigravity</option></select><button id="send-guidance" class="button primary">Send guidance</button></div></div>
+        <div id="conversation" class="conversation"><div class="empty">Start a task below to bring Codex, Claude, and Antigravity into one conversation.</div></div>
+      </div>
+      <div class="compose"><label for="prompt">New task</label><textarea id="prompt" placeholder="What should the team work on?"></textarea><div class="compose-footer"><span class="hint">Agents use separate Git worktrees. Nothing merges automatically.</span><button id="start" class="button primary">Start team task</button></div></div>
+    </main>
+    <aside class="inspector"><h2>Task details</h2><div class="card"><h3>Overview</h3><div id="overview-card" class="notice">Select a task to see its progress.</div></div><div class="card"><h3>Changed files</h3><ul id="files" class="file-list"><li>No task selected</li></ul></div><div class="card"><h3>Git diff</h3><div id="agent-tabs" class="segmented"></div><pre id="diff" class="diff">No changes to display.</pre></div><div class="card"><h3>Test results</h3><div id="tests" class="notice">No test results yet.</div></div></aside>
+  </div>
+  <div id="toast" class="toast hidden" role="alert"></div>
+  <script>
+    const TOKEN = "__AI_TEAM_TOKEN__";
+    const $ = (id) => document.getElementById(id);
+    let selected = null;
+    let selectedAgent = "codex";
+    let currentTask = null;
+    let currentChanges = {};
+    let refreshing = false;
+
+    async function api(path, options = {}) {
+      const response = await fetch(path, {
+        ...options,
+        headers: {"X-AI-Team-Token": TOKEN, ...(options.body ? {"Content-Type": "application/json"} : {})},
+        cache: "no-store"
+      });
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Request failed");
+      return data;
+    }
+    function showError(error) {
+      const toast = $("toast");
+      toast.textContent = error.message || String(error);
+      toast.classList.remove("hidden");
+      setTimeout(() => toast.classList.add("hidden"), 6000);
+    }
+    function node(tag, className, text) {
+      const element = document.createElement(tag);
+      if (className) element.className = className;
+      if (text !== undefined) element.textContent = text;
+      return element;
+    }
+    function renderTasks(tasks) {
+      const list = $("task-list");
+      list.replaceChildren();
+      if (!tasks.length) { list.append(node("div", "notice", "No tasks yet.")); return; }
+      for (const task of tasks) {
+        const button = node("button", "task-item" + (task.id === selected ? " selected" : ""));
+        button.append(node("span", "task-title", task.title));
+        const meta = node("span", "task-meta");
+        meta.append(node("span", "", task.active ? "Running" : task.status.replaceAll("_", " ")));
+        meta.append(node("span", "", `${task.turn_count} turns`));
+        button.append(meta);
+        button.addEventListener("click", () => { selected = task.id; refresh(); });
+        list.append(button);
+      }
+    }
+    function renderAgents(agents) {
+      const container = $("agents");
+      container.replaceChildren();
+      for (const [name, ready] of Object.entries(agents)) {
+        const row = node("div", "agent-row");
+        const label = node("span");
+        label.append(node("span", "dot" + (ready ? " ready" : "")));
+        label.append(document.createTextNode(name === "gemini" ? "Antigravity" : name[0].toUpperCase() + name.slice(1)));
+        row.append(label, node("span", "", ready ? "Ready" : "Missing"));
+        container.append(row);
+      }
+    }
+    function renderMessages(messages) {
+      const container = $("conversation");
+      container.replaceChildren();
+      if (!messages.length) { container.append(node("div", "empty", "No messages yet.")); return; }
+      for (const message of messages) {
+        const card = node("article", "message");
+        const avatar = node("div", `avatar ${message.sender}`, message.sender.slice(0, 1).toUpperCase());
+        const body = node("div", "message-body");
+        const head = node("div", "message-head");
+        head.append(node("span", "sender", message.sender === "gemini" ? "Antigravity" : message.sender));
+        if (message.recipient && message.recipient !== "all") head.append(node("span", "recipient", `to ${message.recipient}`));
+        head.append(node("span", "time", new Date(message.timestamp).toLocaleTimeString([], {hour: "2-digit", minute: "2-digit"})));
+        let content = message.content;
+        const trimmed = content.trim();
+        if (trimmed.startsWith("```json") && trimmed.endsWith("```")) {
+          try {
+            const parsed = JSON.parse(trimmed.slice(7, -3).trim());
+            if (typeof parsed.message === "string") {
+              content = parsed.message;
+              if (parsed.delegate_to && parsed.delegated_task) content += `\n\nRequest to ${parsed.delegate_to}: ${parsed.delegated_task}`;
+            }
+          } catch (_) { /* Keep the original message if it is not valid JSON. */ }
+        }
+        body.append(head, node("pre", "message-text", content));
+        card.append(avatar, body);
+        container.append(card);
+      }
+    }
+    function renderOverview(task) {
+      const container = $("overview-card");
+      container.replaceChildren();
+      for (const [label, value] of [["Task ID", task.id], ["Status", task.active ? "Running" : task.status.replaceAll("_", " ")], ["Agent turns", String(task.turn_count)], ["Round", `${task.current_round} / ${task.max_rounds}`]]) {
+        const row = node("div", "info-row");
+        row.append(node("span", "", label), node("span", "value", value));
+        container.append(row);
+      }
+    }
+    function renderChanges(changes) {
+      currentChanges = changes;
+      const tabs = $("agent-tabs");
+      tabs.replaceChildren();
+      for (const name of ["codex", "claude", "gemini"]) {
+        const button = node("button", selectedAgent === name ? "active" : "", name === "gemini" ? "Antigravity" : name[0].toUpperCase() + name.slice(1));
+        button.addEventListener("click", () => { selectedAgent = name; renderChanges(currentChanges); });
+        tabs.append(button);
+      }
+      const active = changes[selectedAgent];
+      const files = $("files");
+      files.replaceChildren();
+      if (!active || !active.files.length) files.append(node("li", "", "No changed files."));
+      else for (const name of active.files) files.append(node("li", "", name));
+      $("diff").textContent = active ? (active.diff || (active.files.length ? "Changed files include untracked files. Inspect them in the worktree." : "No diff.")) + (active.truncated ? "\n\n[Diff truncated]" : "") : "No worktree yet.";
+    }
+    function renderTests(artifacts) {
+      const container = $("tests");
+      container.replaceChildren();
+      const runs = artifacts.flatMap(item => item.tests || []);
+      if (!runs.length) { container.textContent = "No configured test runs yet."; return; }
+      for (const run of runs.slice(-5)) {
+        const line = node("div", "info-row");
+        line.append(node("span", "", (run.command || ["Test"]).join(" ")),
+                    node("span", "value", run.error ? "Error" : run.exit_code === 0 ? "Passed" : "Failed"));
+        container.append(line);
+      }
+    }
+    function renderTask(data) {
+      const task = data.task;
+      currentTask = task;
+      $("title").textContent = task.title;
+      $("subtitle").textContent = `Task ${task.id} · ${task.turn_count} agent turns`;
+      const status = $("status");
+      status.textContent = task.active ? "Running" : task.status.replaceAll("_", " ");
+      status.className = `status ${task.active ? "running" : task.status}`;
+      $("actions").classList.remove("hidden");
+      $("retry").disabled = task.active || !task.can_retry;
+      $("resume").disabled = task.active || task.status !== "running";
+      $("stop").disabled = task.status !== "running";
+      $("guidance").classList.toggle("hidden", task.active || task.status !== "awaiting_human");
+      renderMessages(data.messages);
+      renderOverview(task);
+      renderTests(task.artifacts || []);
+    }
+    async function refresh() {
+      if (refreshing) return;
+      refreshing = true;
+      try {
+        const overview = await api("/api/overview");
+        if (!selected && overview.tasks.length) selected = overview.tasks[0].id;
+        renderTasks(overview.tasks);
+        renderAgents(overview.agents);
+        if (selected) {
+          const id = selected;
+          const [task, changes] = await Promise.all([api(`/api/tasks/${id}`), api(`/api/tasks/${id}/diff`)]);
+          if (selected === id) { renderTask(task); renderChanges(changes.changes); }
+        }
+      } catch (error) { showError(error); }
+      finally { refreshing = false; }
+    }
+    async function action(name) {
+      if (!selected) return;
+      try {
+        await api(`/api/tasks/${selected}/${name}`, {method: "POST", body: "{}"});
+        await refresh();
+      } catch (error) { showError(error); }
+    }
+    $("start").addEventListener("click", async () => {
+      const prompt = $("prompt").value.trim();
+      if (!prompt) { showError(new Error("Enter a task first.")); return; }
+      $("start").disabled = true;
+      try {
+        const result = await api("/api/tasks", {method: "POST", body: JSON.stringify({prompt})});
+        $("prompt").value = "";
+        selected = result.task_id;
+        await refresh();
+      } catch (error) { showError(error); }
+      finally { $("start").disabled = false; }
+    });
+    $("retry").addEventListener("click", () => action("retry"));
+    $("resume").addEventListener("click", () => action("resume"));
+    $("stop").addEventListener("click", () => action("stop"));
+    $("refresh").addEventListener("click", refresh);
+    $("send-guidance").addEventListener("click", async () => {
+      if (!selected) return;
+      const message = $("guidance-message").value.trim();
+      if (!message) { showError(new Error("Enter guidance first.")); return; }
+      $("send-guidance").disabled = true;
+      try {
+        await api(`/api/tasks/${selected}/guide`, {method: "POST", body: JSON.stringify({message, recipient: $("guidance-recipient").value})});
+        $("guidance-message").value = "";
+        await refresh();
+      } catch (error) { showError(error); }
+      finally { $("send-guidance").disabled = false; }
+    });
+    refresh();
+    setInterval(refresh, 3000);
+  </script>
+</body>
+</html>

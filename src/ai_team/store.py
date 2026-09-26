@@ -61,7 +61,7 @@ class Store:
         self.db.execute("""INSERT INTO tasks VALUES (:id,:title,:original_prompt,:status,:created_at,
                          :current_round,:max_rounds,:turn_count,:roles,:queue,:seen_delegations,:git_state,:artifacts)
                          ON CONFLICT(id) DO UPDATE SET status=excluded.status,current_round=excluded.current_round,
-                         turn_count=excluded.turn_count,roles=excluded.roles,queue=excluded.queue,
+                         max_rounds=excluded.max_rounds,turn_count=excluded.turn_count,roles=excluded.roles,queue=excluded.queue,
                          seen_delegations=excluded.seen_delegations,git_state=excluded.git_state,artifacts=excluded.artifacts""", row)
         self.db.commit()
 
