@@ -40,19 +40,43 @@ class Store:
     def close(self) -> None:
         self.db.close()
 
-    def create_task(self, prompt: str, config: dict[str, Any], roles: dict[str, str] | None = None) -> dict[str, Any]:
+    def create_task(self, prompt: str, config: dict[str, Any], roles: dict[str, str] | None = None,
+                    recipient: str = "all") -> dict[str, Any]:
         task_id = uuid.uuid4().hex[:12]
         agents = [name for name, entry in config["agents"].items() if entry["enabled"]]
         if not agents:
             raise ValueError("No agents are enabled")
+        if recipient != "all":
+            if recipient not in agents:
+                raise ValueError("Choose an enabled agent or the whole team")
+            agents = [recipient]
         task = {"id": task_id, "title": prompt.strip().splitlines()[0][:100], "original_prompt": prompt,
                 "status": "running", "created_at": now(), "current_round": 1,
                 "max_rounds": config["collaboration"]["max_rounds"], "turn_count": 0,
                 "roles": roles or {}, "queue": [{"agent": name, "task": prompt, "source": "human", "round": 1} for name in agents],
                 "seen_delegations": [], "git_state": {}, "artifacts": []}
         self.save_task(task)
-        self.add_message(task_id, "human", "all", prompt)
+        self.add_message(task_id, "human", recipient, prompt)
         return task
+
+    def last_agent_usage(self) -> dict[str, int | None]:
+        usage: dict[str, int | None] = {}
+        for row in self.db.execute("SELECT agent, response FROM invocations ORDER BY rowid DESC"):
+            agent = row["agent"]
+            if agent in usage:
+                continue
+            try:
+                values = json.loads(row["response"]).get("usage") or {}
+                count = values.get("total_tokens")
+                if not isinstance(count, (int, float)):
+                    parts = (values.get(key) for key in (
+                        "input_tokens", "output_tokens", "cache_creation_input_tokens", "cache_read_input_tokens"
+                    ))
+                    count = sum(part for part in parts if isinstance(part, (int, float)))
+                usage[agent] = int(count) if count else None
+            except (ValueError, TypeError, AttributeError):
+                usage[agent] = None
+        return usage
 
     def save_task(self, task: dict[str, Any]) -> None:
         row = dict(task)

@@ -71,6 +71,19 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(body)["changes"], {})
 
+    def test_overview_reports_last_turn_usage_without_guessing_remaining(self):
+        store = Store(self.root / ".ai-team" / "state.sqlite3")
+        store.record_invocation({"id": "usage-test", "task_id": self.task["id"], "agent": "codex",
+                                 "started_at": "2026-01-01T00:00:00Z", "duration_seconds": 1.0,
+                                 "exit_code": 0, "prompt": "task", "raw_output": "", "stderr": "",
+                                 "response": json.dumps({"usage": {"input_tokens": 20, "output_tokens": 4}}),
+                                 "diff_before": "", "diff_after": ""})
+        store.close()
+        status, body = self.request("GET", "/api/overview")
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body)["usage"]["codex"], 24)
+        self.assertNotIn("remaining", json.loads(body))
+
     def test_token_and_origin_guard_mutations(self):
         status, _ = self.request("GET", "/api/overview", token=None)
         self.assertEqual(status, 403)
@@ -92,6 +105,38 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(launched, [(task_id, "resume")])
         store = Store(self.root / ".ai-team" / "state.sqlite3")
         self.assertEqual(store.get_task(task_id)["original_prompt"], "Review the docs")
+        store.close()
+
+    def test_new_task_can_target_one_agent(self):
+        launched = []
+        with patch("ai_team.server.available_agents", return_value={"codex": True, "claude": True, "gemini": True}), \
+             patch.object(self.server.app, "_launch", side_effect=lambda task_id, action: launched.append((task_id, action))):
+            status, body = self.request("POST", "/api/tasks", {"prompt": "Check the parser", "recipient": "claude"})
+        self.assertEqual(status, 202)
+        task_id = json.loads(body)["task_id"]
+        store = Store(self.root / ".ai-team" / "state.sqlite3")
+        self.assertEqual([item["agent"] for item in store.get_task(task_id)["queue"]], ["claude"])
+        self.assertEqual(store.messages(task_id)[0]["recipient"], "claude")
+        store.close()
+
+    def test_message_to_existing_chat_queues_selected_agent(self):
+        store = Store(self.root / ".ai-team" / "state.sqlite3")
+        task = store.get_task(self.task["id"])
+        task["status"] = "review_ready"
+        task["queue"] = []
+        store.save_task(task)
+        store.close()
+        launched = []
+        with patch.object(self.server.app, "_launch", side_effect=lambda task_id, action: launched.append((task_id, action))):
+            status, _ = self.request("POST", f"/api/tasks/{self.task['id']}/message",
+                                     {"message": "Check this edge case", "recipient": "gemini"})
+        self.assertEqual(status, 202)
+        self.assertEqual(launched, [(self.task["id"], "resume")])
+        store = Store(self.root / ".ai-team" / "state.sqlite3")
+        saved = store.get_task(self.task["id"])
+        self.assertEqual(saved["status"], "running")
+        self.assertEqual([item["agent"] for item in saved["queue"]], ["gemini"])
+        self.assertEqual(store.messages(self.task["id"])[-1]["recipient"], "gemini")
         store.close()
 
     def test_guidance_for_paused_task_queues_resume(self):

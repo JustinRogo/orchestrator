@@ -18,7 +18,7 @@ from .config import available_agents, load
 from .coordinator import Coordinator
 
 
-TASK_PATH = re.compile(r"^/api/tasks/([a-f0-9]{12})(?:/(diff|resume|retry|stop|guide))?$")
+TASK_PATH = re.compile(r"^/api/tasks/([a-f0-9]{12})(?:/(diff|resume|retry|stop|guide|message))?$")
 MAX_BODY_BYTES = 32_768
 
 
@@ -41,10 +41,12 @@ class WebApp:
         config = load(self.root)
         with self.coordinator() as coordinator:
             tasks = coordinator.store.list_tasks()
+            usage = coordinator.store.last_agent_usage()
         with self.lock:
             active = set(self.active)
         return {
             "agents": available_agents(config),
+            "usage": usage,
             "tasks": [{"id": task["id"], "title": task["title"], "status": task["status"],
                        "turn_count": task["turn_count"], "created_at": task["created_at"],
                        "active": task["id"] in active} for task in tasks],
@@ -78,7 +80,7 @@ class WebApp:
                                       "diff": diff[:200_000], "truncated": len(diff) > 200_000}
         return {"changes": changes}
 
-    def create(self, prompt: str, roles: dict[str, str] | None = None) -> str:
+    def create(self, prompt: str, roles: dict[str, str] | None = None, recipient: str = "all") -> str:
         if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 20_000:
             raise ValueError("Enter a task of at most 20,000 characters")
         if roles is not None and (not isinstance(roles, dict) or any(
@@ -91,7 +93,7 @@ class WebApp:
         if missing:
             raise ValueError(f"Required CLIs missing: {', '.join(missing)}")
         with self.coordinator() as coordinator:
-            task = coordinator.create(prompt, roles)
+            task = coordinator.create(prompt, roles, recipient)
         self._launch(task["id"], "resume")
         return task["id"]
 
@@ -121,6 +123,14 @@ class WebApp:
                 raise ValueError("This task already has an active run")
         with self.coordinator() as coordinator:
             coordinator.guide(task_id, message, recipient)
+        self._launch(task_id, "resume")
+
+    def message(self, task_id: str, message: str, recipient: str) -> None:
+        with self.lock:
+            if task_id in self.active:
+                raise ValueError("Wait for the current agent turn before messaging")
+        with self.coordinator() as coordinator:
+            coordinator.send_message(task_id, message, recipient)
         self._launch(task_id, "resume")
 
     def _launch(self, task_id: str, action: str) -> None:
@@ -237,10 +247,14 @@ def make_server(root: Path, port: int = 8765, token: str | None = None) -> Threa
                     raise ValueError("Expected a JSON object")
                 path = urlsplit(self.path).path
                 if path == "/api/tasks":
-                    task_id = app.create(body.get("prompt"), body.get("roles"))
+                    task_id = app.create(body.get("prompt"), body.get("roles"), body.get("recipient", "all"))
                     self._json(HTTPStatus.ACCEPTED, {"task_id": task_id})
                     return
                 match = TASK_PATH.fullmatch(path)
+                if match and match.group(2) == "message":
+                    app.message(match.group(1), body.get("message"), body.get("recipient", "all"))
+                    self._json(HTTPStatus.ACCEPTED, {"task_id": match.group(1), "action": "message"})
+                    return
                 if match and match.group(2) == "guide":
                     app.guide(match.group(1), body.get("message"), body.get("recipient", "all"))
                     self._json(HTTPStatus.ACCEPTED, {"task_id": match.group(1), "action": "guide"})

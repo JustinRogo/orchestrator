@@ -57,10 +57,11 @@ class Coordinator:
         task = self.create(prompt, roles)
         return self.resume(task["id"])
 
-    def create(self, prompt: str, roles: dict[str, str] | None = None) -> dict[str, Any]:
+    def create(self, prompt: str, roles: dict[str, str] | None = None,
+               recipient: str = "all") -> dict[str, Any]:
         if not prompt.strip():
             raise ValueError("Task prompt must not be empty")
-        task = self.store.create_task(prompt, self.config, roles)
+        task = self.store.create_task(prompt, self.config, roles, recipient)
         task["git_state"]["base"] = self.git.head()
         self.store.save_task(task)
         return task
@@ -177,8 +178,14 @@ class Coordinator:
         task = self.store.get_task(task_id)
         if task["status"] != "awaiting_human":
             raise ValueError("Task is not waiting for human guidance")
+        return self.send_message(task_id, message, recipient)
+
+    def send_message(self, task_id: str, message: str, recipient: str = "all") -> dict[str, Any]:
+        task = self.store.get_task(task_id)
+        if task["status"] not in {"awaiting_human", "review_ready", "complete", "stopped"}:
+            raise ValueError("Wait for the current turn or retry the failed turn before messaging")
         if not isinstance(message, str) or not message.strip() or len(message) > 20_000:
-            raise ValueError("Enter guidance of at most 20,000 characters")
+            raise ValueError("Enter a message of at most 20,000 characters")
         enabled = [name for name, settings in self.config["agents"].items() if settings["enabled"]]
         if recipient != "all" and recipient not in enabled:
             raise ValueError("Choose an enabled agent or the whole team")
