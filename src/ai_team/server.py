@@ -58,7 +58,9 @@ class WebApp:
                 "SELECT exit_code FROM invocations WHERE task_id=? ORDER BY rowid DESC LIMIT 1", (task_id,)
             ).fetchone()
             task["can_retry"] = (task["status"] in {"failed", "awaiting_human"}
-                                 and invocation is not None and invocation["exit_code"] != 0)
+                                 and ((task["git_state"].get("setup_failure") and bool(task["queue"]))
+                                      or (invocation is None and bool(task["queue"]))
+                                      or (invocation is not None and invocation["exit_code"] != 0)))
         with self.lock:
             task["active"] = task_id in self.active
         return {"task": task, "messages": messages}
@@ -104,7 +106,10 @@ class WebApp:
                 invocation = coordinator.store.db.execute(
                     "SELECT exit_code FROM invocations WHERE task_id=? ORDER BY rowid DESC LIMIT 1", (task_id,)
                 ).fetchone()
-                if task["status"] not in {"failed", "awaiting_human"} or invocation is None or invocation["exit_code"] == 0:
+                if (task["status"] not in {"failed", "awaiting_human"}
+                        or (not task["git_state"].get("setup_failure")
+                            and ((invocation is None and not task["queue"])
+                                 or (invocation is not None and invocation["exit_code"] == 0)))):
                     raise ValueError("Task has no failed CLI turn to retry")
             if action == "resume" and task["status"] != "running":
                 raise ValueError("Only a running task can be resumed")
@@ -139,6 +144,7 @@ class WebApp:
                 task = coordinator.store.get_task(task_id)
                 if task["status"] != "stopped":
                     task["status"] = "failed"
+                    task["git_state"]["setup_failure"] = True
                     coordinator.store.save_task(task)
                 coordinator.store.add_message(task_id, "system", "human", f"Run failed: {error}")
         finally:

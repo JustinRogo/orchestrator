@@ -77,8 +77,8 @@ class Coordinator:
                 task["status"] = "awaiting_human"
                 break
             task["current_round"] = item["round"]
-            worktree = self.git.ensure(task_id, agent)
             base = task["git_state"].get("base", "HEAD")
+            worktree = self.git.ensure(task_id, agent, base)
             before = self.git.diff(worktree, base)
             old_status = self.git.status(worktree)
             settings = dict(self.config["agents"][agent])
@@ -194,10 +194,22 @@ class Coordinator:
         task = self.store.get_task(task_id)
         if task["status"] not in {"failed", "awaiting_human"}:
             raise ValueError("Task is not stopped on a failed CLI invocation")
+        if task["git_state"].pop("setup_failure", False):
+            if not task["queue"]:
+                raise ValueError("No queued turn to retry")
+            task["status"] = "running"
+            self.store.save_task(task)
+            return self.resume(task_id)
         invocation = self.store.db.execute(
             "SELECT agent, exit_code FROM invocations WHERE task_id=? ORDER BY rowid DESC LIMIT 1", (task_id,)
         ).fetchone()
-        if invocation is None or invocation["exit_code"] == 0:
+        if invocation is None:
+            if not task["queue"]:
+                raise ValueError("No queued turn to retry")
+            task["status"] = "running"
+            self.store.save_task(task)
+            return self.resume(task_id)
+        if invocation["exit_code"] == 0:
             raise ValueError("Most recent invocation was not a CLI failure")
         if not task["queue"] or task["queue"][0]["agent"] != invocation["agent"]:
             task["queue"].insert(0, {"agent": invocation["agent"], "task": task["original_prompt"],

@@ -111,6 +111,21 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(store.messages(self.task["id"])[-1]["content"], "Check the parser")
         store.close()
 
+    def test_setup_failure_can_be_retried(self):
+        store = Store(self.root / ".ai-team" / "state.sqlite3")
+        task = store.get_task(self.task["id"])
+        task["status"] = "failed"
+        store.save_task(task)
+        store.close()
+        status, body = self.request("GET", f"/api/tasks/{self.task['id']}")
+        self.assertEqual(status, 200)
+        self.assertTrue(json.loads(body)["task"]["can_retry"])
+        launched = []
+        with patch.object(self.server.app, "_launch", side_effect=lambda task_id, action: launched.append((task_id, action))):
+            status, _ = self.request("POST", f"/api/tasks/{self.task['id']}/retry", {})
+        self.assertEqual(status, 202)
+        self.assertEqual(launched, [(self.task["id"], "retry")])
+
 
 if __name__ == "__main__":
     unittest.main()

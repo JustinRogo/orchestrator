@@ -168,6 +168,38 @@ class FlowTests(unittest.TestCase):
         self.assertEqual(task["status"], "complete")
         self.assertEqual([agent for agent, _ in FakeAdapter.calls], ["codex", "codex", "claude", "gemini"])
 
+    def test_retry_recovers_worktree_setup_failure(self):
+        FakeAdapter.scripted = {
+            "codex": [AgentResponse("codex", "Recovered", status="complete")],
+        }
+        self.config["agents"]["claude"]["enabled"] = False
+        self.config["agents"]["gemini"]["enabled"] = False
+        coordinator = self.coordinator()
+        task = coordinator.create("Inspect parser")
+        task["status"] = "failed"
+        coordinator.store.save_task(task)
+        recovered = coordinator.retry_failed(task["id"])
+        self.assertEqual(recovered["status"], "complete")
+        self.assertEqual(recovered["turn_count"], 1)
+
+    def test_new_worktrees_use_task_original_base(self):
+        FakeAdapter.scripted = {
+            "codex": [AgentResponse("codex", "Done", status="complete")],
+            "claude": [AgentResponse("claude", "Done", status="complete")],
+            "gemini": [AgentResponse("gemini", "Done", status="complete")],
+        }
+        coordinator = self.coordinator()
+        task = coordinator.create("Inspect parser")
+        original_base = task["git_state"]["base"]
+        (self.root / "README.md").write_text("new main commit\n", encoding="utf-8")
+        git(self.root, "commit", "-qam", "main moved")
+        coordinator.resume(task["id"])
+        for agent in ("codex", "claude", "gemini"):
+            worktree = coordinator.git.path(task["id"], agent)
+            head = subprocess.run(["git", "rev-parse", "HEAD"], cwd=worktree, check=True,
+                                  capture_output=True, text=True).stdout.strip()
+            self.assertEqual(head, original_base)
+
     def test_stop_during_agent_turn_is_preserved(self):
         BlockingAdapter.entered.clear()
         BlockingAdapter.release.clear()

@@ -23,12 +23,14 @@ class GitWorkspaceManager:
             raise ValueError("Invalid worktree identity")
         return self.base / task_id / agent
 
-    def ensure(self, task_id: str, agent: str) -> Path:
+    def ensure(self, task_id: str, agent: str, base: str = "HEAD") -> Path:
+        if not re.fullmatch(r"[a-f0-9]{40,64}|HEAD", base):
+            raise ValueError("Invalid worktree base")
         path = self.path(task_id, agent)
         if not path.exists():
             path.parent.mkdir(parents=True, exist_ok=True)
             branch = f"agent/{agent}/{task_id}"
-            self._git("worktree", "add", "-b", branch, str(path), "HEAD")
+            self._git("worktree", "add", "-b", branch, str(path), base)
         self.verify(path)
         return path
 
