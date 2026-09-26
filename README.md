@@ -20,7 +20,7 @@ ai-team review <task-id>
 
 The initial conversation runs Codex, then Claude, then Gemini. Subsequent requests use structured `delegate_to`/`delegated_task` fields or a leading `@agent` message line. Max turns, rounds, repeated requests, and empty delegation tasks are guarded. A blocked response or exhausted queue requiring a decision moves the task to `awaiting_human`. There is no automatic merge command.
 
-Claude Code and Antigravity CLI were unavailable on the development machine, so the end-to-end flow was verified with simulated adapters. If you initialized this project before the Antigravity update, change the `gemini` entry in `.ai-team/config.yaml` to `command: agy`, remove `--approval-mode plan` from its `args`, and set `format: antigravity-json`; the default now also passes a response schema through `--json-schema`. The default does not bypass Antigravity permissions. Its read-only reviewer role is an instruction with worktree change detection, not a filesystem guarantee. See [the design and risk notes](docs/PLAN.md).
+Claude Code 2.1.283 and Antigravity CLI 1.2.11 were found locally by absolute path, though this app session's PATH does not include their install directories. The end-to-end flow remains verified with simulated adapters. If you initialized this project before the Antigravity update, change the `gemini` entry in `.ai-team/config.yaml` to launch `agy`, remove `--approval-mode plan`, and set `format: antigravity-json`; the default now passes a response schema through `--json-schema` and selects the installed CLI's `--mode plan` for review. The default does not bypass permissions. Worktree change detection is an additional check, not a filesystem guarantee. See [the design and risk notes](docs/PLAN.md).
 
 ## Development
 

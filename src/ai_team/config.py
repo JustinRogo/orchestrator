@@ -30,7 +30,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
                    "command": "claude", "args": ["-p", "--output-format", "json", "--permission-mode", "plan"],
                    "format": "claude-json", "prompt_mode": "stdin"},
         "gemini": {"enabled": True, "role": "independent QA", "read_only": True,
-                   "command": "agy", "args": ["-p", "{prompt}", "--output-format", "json", "--json-schema", AGY_RESPONSE_SCHEMA],
+                   "command": "agy", "args": ["-p", "{prompt}", "--output-format", "json", "--json-schema", AGY_RESPONSE_SCHEMA, "--mode", "plan"],
                    "format": "antigravity-json", "prompt_mode": "argument"},
     },
     "collaboration": {"max_turns": 12, "max_rounds": 3, "allow_agent_delegation": True,
