@@ -124,7 +124,8 @@ class CLIAdapter:
                   "stderr": result.stderr, "raw_output": result.stdout}
         if result.returncode:
             response.status = "blocked"
-            response.message = f"CLI exited {result.returncode}: {result.stderr.strip()[-1000:]}"
+            reason = result.stderr.strip()[-1000:] or response.message
+            response.message = f"CLI exited {result.returncode}: {reason}"
         return response, detail
 
 

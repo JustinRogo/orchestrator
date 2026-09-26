@@ -26,9 +26,9 @@ def parser() -> argparse.ArgumentParser:
 
 def show_chat(coordinator: Coordinator, task_id: str) -> None:
     task = coordinator.store.get_task(task_id)
-    print(f"Task {task_id} [{task['status']}] — {task['title']}")
+    print(f"Task {task_id} [{task['status']}] - {task['title']}")
     for message in coordinator.store.messages(task_id):
-        print(f"\n[{message['sender'].upper()} → {message['recipient'].upper() if message['recipient'] else 'ALL'}]\n{message['content']}")
+        print(f"\n[{message['sender'].upper()} -> {message['recipient'].upper() if message['recipient'] else 'ALL'}]\n{message['content']}")
     if task["status"] == "awaiting_human":
         print("\nHUMAN DECISION REQUIRED: inspect the conversation and worktree diffs.")
     elif task["status"] == "failed":
@@ -36,6 +36,8 @@ def show_chat(coordinator: Coordinator, task_id: str) -> None:
 
 
 def main(argv: list[str] | None = None) -> int:
+    sys.stdout.reconfigure(errors="replace")
+    sys.stderr.reconfigure(errors="replace")
     args = parser().parse_args(argv)
     root = args.project.resolve()
     try:
