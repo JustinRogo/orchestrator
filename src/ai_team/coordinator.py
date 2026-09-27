@@ -8,6 +8,7 @@ from typing import Any, Callable
 from .adapters import ADAPTERS, AgentResponse
 from .config import team_dir
 from .git import CommandPolicy, GitWorkspaceManager
+from .quota import collect as collect_quota
 from .store import Store, now
 
 
@@ -108,6 +109,11 @@ class Coordinator:
                 except Exception as error:
                     response.tests_run = [{"error": str(error)}]
             self._record(task, response, detail, before, after)
+            if self.adapter_factory is None:
+                try:
+                    self.store.save_quota(agent, collect_quota(agent, settings["command"], self.root))
+                except (OSError, ValueError, TimeoutError):
+                    pass  # A usage lookup must never turn a completed agent response into a failed turn.
             task["turn_count"] += 1
             if self.store.get_task(task_id)["status"] == "stopped":
                 task["status"] = "stopped"

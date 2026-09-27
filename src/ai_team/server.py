@@ -16,6 +16,7 @@ from urllib.parse import urlsplit
 
 from .config import available_agents, load
 from .coordinator import Coordinator
+from .quota import collect as collect_quota
 
 
 TASK_PATH = re.compile(r"^/api/tasks/([a-f0-9]{12})(?:/(diff|resume|retry|stop|guide|message))?$")
@@ -42,15 +43,29 @@ class WebApp:
         with self.coordinator() as coordinator:
             tasks = coordinator.store.list_tasks()
             usage = coordinator.store.last_agent_usage()
+            quotas = coordinator.store.agent_quotas()
         with self.lock:
             active = set(self.active)
         return {
             "agents": available_agents(config),
             "usage": usage,
+            "quotas": quotas,
             "tasks": [{"id": task["id"], "title": task["title"], "status": task["status"],
                        "turn_count": task["turn_count"], "created_at": task["created_at"],
                        "active": task["id"] in active} for task in tasks],
         }
+
+    def refresh_quotas(self) -> None:
+        config = load(self.root)
+        for agent, settings in config["agents"].items():
+            if not settings["enabled"]:
+                continue
+            try:
+                snapshot = collect_quota(agent, settings["command"], self.root)
+                with self.coordinator() as coordinator:
+                    coordinator.store.save_quota(agent, snapshot)
+            except (OSError, ValueError, TimeoutError):
+                continue
 
     def task(self, task_id: str) -> dict[str, Any]:
         with self.coordinator() as coordinator:
@@ -276,6 +291,7 @@ def make_server(root: Path, port: int = 8765, token: str | None = None) -> Threa
 
 def run_ui(root: Path, port: int = 8765, open_browser: bool = True) -> None:
     server = make_server(root, port)
+    threading.Thread(target=server.app.refresh_quotas, daemon=True, name="ai-team-usage").start()  # type: ignore[attr-defined]
     url = f"http://127.0.0.1:{server.server_port}/"
     print(f"AI Team is running at {url}")
     print("Press Ctrl+C to stop the interface. Agent turns already running will finish their current call.")

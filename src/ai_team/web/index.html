@@ -167,7 +167,7 @@
         list.append(button);
       }
     }
-    function renderAgents(agents, usage) {
+    function renderAgents(agents, usage, quotas) {
       const container = $("agents");
       container.replaceChildren();
       for (const [name, ready] of Object.entries(agents)) {
@@ -180,9 +180,13 @@
         row.append(top);
         const count = usage?.[name];
         row.append(node("div", "agent-usage", `Latest run: ${typeof count === "number" ? count.toLocaleString() + " tokens" : "—"}`));
-        const command = name === "codex" ? "/status" : "/usage";
-        const remaining = node("div", "agent-usage", `Remaining: check ${command} in CLI`);
-        remaining.title = "The provider does not expose remaining plan quota in this dashboard's headless CLI response.";
+        const quota = quotas?.[name];
+        const allWindows = quota?.windows || [];
+        const geminiWindows = allWindows.filter(window => /^Gemini/i.test(window.group || ""));
+        const windows = name === "gemini" && geminiWindows.length ? geminiWindows : allWindows;
+        const summary = windows.map(window => `${window.label} ${window.remaining_percent}%`).join(" · ");
+        const remaining = node("div", "agent-usage", `Remaining: ${summary || "unavailable"}`);
+        if (quota?.checked_at) remaining.title = `${quota.source} · Checked ${new Date(quota.checked_at).toLocaleString()}`;
         row.append(remaining);
         container.append(row);
       }
@@ -321,7 +325,7 @@
         if (!selected && !newChat && overview.tasks.length) selected = overview.tasks[0].id;
         if (!selected && !overview.tasks.length) newChat = true;
         renderTasks(tasks);
-        renderAgents(overview.agents, overview.usage);
+        renderAgents(overview.agents, overview.usage, overview.quotas);
         if (newChat) renderNewChat();
         else if (selected) {
           const id = selected;

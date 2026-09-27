@@ -71,18 +71,20 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(body)["changes"], {})
 
-    def test_overview_reports_last_turn_usage_without_guessing_remaining(self):
+    def test_overview_reports_recorded_tokens_and_quota(self):
         store = Store(self.root / ".ai-team" / "state.sqlite3")
         store.record_invocation({"id": "usage-test", "task_id": self.task["id"], "agent": "codex",
                                  "started_at": "2026-01-01T00:00:00Z", "duration_seconds": 1.0,
                                  "exit_code": 0, "prompt": "task", "raw_output": "", "stderr": "",
                                  "response": json.dumps({"usage": {"input_tokens": 20, "output_tokens": 4}}),
                                  "diff_before": "", "diff_after": ""})
+        store.save_quota("codex", {"checked_at": "2026-01-01T00:00:00Z", "source": "test",
+                                   "windows": [{"label": "5h", "remaining_percent": 88}]})
         store.close()
         status, body = self.request("GET", "/api/overview")
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(body)["usage"]["codex"], 24)
-        self.assertNotIn("remaining", json.loads(body))
+        self.assertEqual(json.loads(body)["quotas"]["codex"]["windows"][0]["remaining_percent"], 88)
 
     def test_token_and_origin_guard_mutations(self):
         status, _ = self.request("GET", "/api/overview", token=None)

@@ -34,6 +34,8 @@ class Store:
                 exit_code INTEGER NOT NULL, prompt TEXT NOT NULL, raw_output TEXT NOT NULL,
                 stderr TEXT NOT NULL, response TEXT NOT NULL, diff_before TEXT NOT NULL,
                 diff_after TEXT NOT NULL);
+            CREATE TABLE IF NOT EXISTS agent_quota (
+                agent TEXT PRIMARY KEY, snapshot TEXT NOT NULL);
         """)
         self.db.commit()
 
@@ -77,6 +79,15 @@ class Store:
             except (ValueError, TypeError, AttributeError):
                 usage[agent] = None
         return usage
+
+    def save_quota(self, agent: str, snapshot: dict[str, Any]) -> None:
+        self.db.execute("INSERT INTO agent_quota VALUES (?, ?) ON CONFLICT(agent) DO UPDATE SET snapshot=excluded.snapshot",
+                        (agent, json.dumps(snapshot)))
+        self.db.commit()
+
+    def agent_quotas(self) -> dict[str, dict[str, Any]]:
+        return {row["agent"]: json.loads(row["snapshot"])
+                for row in self.db.execute("SELECT agent, snapshot FROM agent_quota")}
 
     def save_task(self, task: dict[str, Any]) -> None:
         row = dict(task)
