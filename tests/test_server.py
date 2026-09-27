@@ -10,7 +10,7 @@ from pathlib import Path
 from unittest.mock import patch
 
 from ai_team.config import DEFAULT_CONFIG, initialize
-from ai_team.server import make_server
+from ai_team.server import make_server, run_ui, running_instance
 from ai_team.store import Store
 
 
@@ -172,6 +172,55 @@ class ServerTests(unittest.TestCase):
             status, _ = self.request("POST", f"/api/tasks/{self.task['id']}/retry", {})
         self.assertEqual(status, 202)
         self.assertEqual(launched, [(self.task["id"], "retry")])
+
+    def test_ping_identifies_project_without_token(self):
+        status, body = self.request("GET", "/api/ping", token=None)
+        self.assertEqual(status, 200)
+        self.assertEqual(json.loads(body), {"app": "ai-team", "root": str(self.root.resolve())})
+        connection = http.client.HTTPConnection("127.0.0.1", self.server.server_port, timeout=5)
+        connection.request("GET", "/api/ping", headers={"Host": "evil.invalid"})
+        self.assertEqual(connection.getresponse().status, 403)
+        connection.close()
+        status, body = self.request("GET", "/api/overview")
+        self.assertEqual(json.loads(body)["project"]["name"], self.root.resolve().name)
+
+    def test_second_launch_reuses_running_dashboard(self):
+        port = self.server.server_port
+        self.assertTrue(running_instance(self.root, port))
+        with tempfile.TemporaryDirectory() as other:
+            self.assertFalse(running_instance(Path(other), port))
+        with self.assertRaises(OSError):
+            make_server(self.root, port).server_close()
+        with patch("ai_team.server.webbrowser.open") as opened:
+            run_ui(self.root, port)
+        opened.assert_called_once_with(f"http://127.0.0.1:{port}/")
+
+    def test_launch_reopens_recorded_port_before_searching(self):
+        # The dashboard may sit above the default port if that port was busy when it started.
+        (self.root / ".ai-team" / "ui-port").write_text(str(self.server.server_port), encoding="utf-8")
+        with patch("ai_team.server.webbrowser.open") as opened, \
+             patch("ai_team.server.make_server", side_effect=AssertionError("started a second server")):
+            run_ui(self.root, 8765)
+        opened.assert_called_once_with(f"http://127.0.0.1:{self.server.server_port}/")
+
+    def test_shutdown_requires_token_and_stops_server(self):
+        status, _ = self.request("POST", "/api/shutdown", {}, token=None)
+        self.assertEqual(status, 403)
+        status, _ = self.request("POST", "/api/shutdown", {})
+        self.assertEqual(status, 202)
+        self.thread.join(timeout=5)
+        self.assertFalse(self.thread.is_alive())
+
+    def test_single_recipient_only_needs_that_cli(self):
+        launched = []
+        with patch("ai_team.server.available_agents", return_value={"codex": True, "claude": True, "gemini": False}), \
+             patch.object(self.server.app, "_launch", side_effect=lambda task_id, action: launched.append((task_id, action))):
+            status, _ = self.request("POST", "/api/tasks", {"prompt": "Implement it", "recipient": "codex"})
+            self.assertEqual(status, 202)
+            status, body = self.request("POST", "/api/tasks", {"prompt": "Review it"})
+        self.assertEqual(status, 400)
+        self.assertIn("gemini", json.loads(body)["error"])
+        self.assertEqual(len(launched), 1)
 
 
 if __name__ == "__main__":

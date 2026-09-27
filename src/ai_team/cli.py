@@ -1,12 +1,14 @@
 from __future__ import annotations
 
 import argparse
-import json
+import os
+import subprocess
 import sys
 from pathlib import Path
 
-from .config import available_agents, initialize, load
+from .config import available_agents, initialize, load, team_dir
 from .coordinator import Coordinator
+from .process import console_flags
 
 
 def parser() -> argparse.ArgumentParser:
@@ -17,6 +19,7 @@ def parser() -> argparse.ArgumentParser:
     ui = sub.add_parser("ui", help="Open the local browser interface")
     ui.add_argument("--port", type=int, default=8765)
     ui.add_argument("--no-browser", action="store_true")
+    sub.add_parser("shortcut", help="Create a desktop shortcut that opens the interface for this project")
     start = sub.add_parser("start")
     start.add_argument("prompt")
     start.add_argument("--role", action="append", default=[], metavar="AGENT=ROLE")
@@ -38,12 +41,62 @@ def show_chat(coordinator: Coordinator, task_id: str) -> None:
         print(f"\nCLI invocation failed. Retry with: ai-team retry {task_id}")
 
 
-def main(argv: list[str] | None = None) -> int:
-    sys.stdout.reconfigure(errors="replace")
-    sys.stderr.reconfigure(errors="replace")
-    args = parser().parse_args(argv)
-    root = args.project.resolve()
+def project_root(path: Path) -> Path:
+    """Return the repository top level so commands work from any subdirectory."""
     try:
+        result = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=path, capture_output=True,
+                                text=True, check=False, creationflags=console_flags())
+    except OSError as error:
+        raise ValueError(f"Cannot open project {path}: {error}") from error
+    if result.returncode:
+        raise ValueError(f"{path} is not inside a Git repository. Pass --project PATH to choose one.")
+    return Path(result.stdout.strip()).resolve()
+
+
+def create_shortcut(root: Path) -> Path:
+    if os.name != "nt":
+        raise ValueError("Desktop shortcuts are only supported on Windows; run 'ai-team ui' instead")
+    python = Path(sys.executable)
+    windowless = python.with_name("pythonw.exe")
+    # `-m` imports from the working directory, so the shortcut also works without a pip install.
+    package_parent = Path(__file__).resolve().parent.parent
+    script = (
+        "$path = Join-Path ([Environment]::GetFolderPath('Desktop')) $env:AI_TEAM_LINK;"
+        "$link = (New-Object -ComObject WScript.Shell).CreateShortcut($path);"
+        "$link.TargetPath = $env:AI_TEAM_TARGET; $link.Arguments = $env:AI_TEAM_ARGS;"
+        "$link.WorkingDirectory = $env:AI_TEAM_WORKDIR; $link.Description = $env:AI_TEAM_DESCRIPTION;"
+        "$link.Save(); Write-Output $path"
+    )
+    environment = {**os.environ,
+                   "AI_TEAM_LINK": f"AI Team - {root.name}.lnk",
+                   "AI_TEAM_TARGET": str(windowless if windowless.exists() else python),
+                   "AI_TEAM_ARGS": f'-m ai_team --project "{root}" ui',
+                   "AI_TEAM_WORKDIR": str(package_parent),
+                   "AI_TEAM_DESCRIPTION": f"Open the AI Team dashboard for {root}"}
+    result = subprocess.run(["powershell", "-NoProfile", "-NonInteractive", "-Command", script],
+                            env=environment, capture_output=True, text=True, check=False)
+    if result.returncode:
+        raise RuntimeError(f"Could not create shortcut: {result.stderr.strip()}")
+    return Path(result.stdout.strip())
+
+
+def report_error(message: str) -> None:
+    if sys.stderr is not None:
+        print(f"error: {message}", file=sys.stderr)
+    elif os.name == "nt":
+        # A windowless launch has no console, so show startup errors in a dialog.
+        import ctypes
+        ctypes.windll.user32.MessageBoxW(None, message, "AI Team", 0x10)
+
+
+def main(argv: list[str] | None = None) -> int:
+    # pythonw (the desktop shortcut) runs without standard streams.
+    for stream in (sys.stdout, sys.stderr):
+        if stream is not None:
+            stream.reconfigure(errors="replace")
+    args = parser().parse_args(argv)
+    try:
+        root = project_root(args.project.resolve())
         if args.command == "init":
             path = initialize(root)
             config = load(root)
@@ -51,6 +104,13 @@ def main(argv: list[str] | None = None) -> int:
             for agent, found in available_agents(config).items():
                 print(f"{agent} ({config['agents'][agent]['command']}): {'found' if found else 'missing; configure or install before start'}")
             return 0
+        if args.command == "shortcut":
+            path = create_shortcut(root)
+            print(f"Created {path}")
+            print(f"Double-click it to open the dashboard for {root}; right-click to pin it to Start or the taskbar.")
+            return 0
+        if args.command == "ui" and not (team_dir(root) / "config.yaml").exists():
+            print(f"Initialized {initialize(root)}")
         config = load(root)
         if args.command == "ui":
             from .server import run_ui
@@ -107,8 +167,8 @@ def main(argv: list[str] | None = None) -> int:
                 coordinator.git.cleanup(task["id"], agent)
             print(f"Removed clean worktrees for {task['id']}; task history is retained")
         return 0
-    except (ValueError, RuntimeError) as error:
-        print(f"error: {error}", file=sys.stderr)
+    except (ValueError, RuntimeError, OSError) as error:
+        report_error(str(error))
         return 2
 
 

@@ -11,6 +11,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .config import resolve_command
+from .process import console_flags
+
 
 def _snapshot(windows: list[dict[str, Any]], source: str) -> dict[str, Any]:
     return {"checked_at": datetime.now(timezone.utc).isoformat(), "source": source,
@@ -84,7 +87,7 @@ def parse_antigravity(payload: dict[str, Any]) -> dict[str, Any]:
 def _codex(command: str, root: Path) -> dict[str, Any]:
     process = subprocess.Popen([command, "app-server"], cwd=root, stdin=subprocess.PIPE,
                                stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
-                               text=True, encoding="utf-8", errors="replace")
+                               text=True, encoding="utf-8", errors="replace", creationflags=console_flags())
     lines: queue.Queue[str] = queue.Queue()
     def read_lines() -> None:
         for line in process.stdout:
@@ -125,13 +128,15 @@ def _codex(command: str, root: Path) -> dict[str, Any]:
 
 
 def collect(agent: str, command: str, root: Path) -> dict[str, Any]:
+    command = resolve_command(command) or command
     if agent == "codex":
         return _codex(command, root)
     if agent not in {"claude", "gemini"}:
         raise ValueError(f"Unknown agent: {agent}")
     try:
         result = subprocess.run([command, "-p", "/usage", "--output-format", "json"], cwd=root,
-                                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15)
+                                capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=15,
+                                creationflags=console_flags())
     except subprocess.TimeoutExpired as error:
         raise TimeoutError(f"{agent} usage query timed out") from error
     if result.returncode:

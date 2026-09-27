@@ -1,7 +1,9 @@
 from __future__ import annotations
 
 import copy
+import glob
 import json
+import os
 import shutil
 from pathlib import Path
 from typing import Any
@@ -93,5 +95,30 @@ def load(root: Path) -> dict[str, Any]:
     return config
 
 
+# Standard install locations for CLIs whose installers do not always update PATH.
+# Codex installs into a hashed directory that changes on each update.
+KNOWN_LOCATIONS: dict[str, list[str]] = {
+    "codex": ["$LOCALAPPDATA/OpenAI/Codex/bin/*/codex.exe"],
+    "claude": ["~/.local/bin/claude.exe", "~/.local/bin/claude", "~/.claude/local/claude"],
+    "agy": ["$LOCALAPPDATA/agy/bin/agy.exe", "~/.local/bin/agy"],
+}
+
+
+def resolve_command(command: str) -> str | None:
+    """Find an agent executable on PATH, then in its installer's standard location.
+
+    A configured absolute path that no longer exists (for example, after a Codex update)
+    falls back to the standard location for that executable's name.
+    """
+    found = shutil.which(command)
+    if found:
+        return found
+    candidates: list[Path] = []
+    for pattern in KNOWN_LOCATIONS.get(Path(command).stem.lower(), []):
+        candidates += [Path(match) for match in glob.glob(os.path.expandvars(os.path.expanduser(pattern)))]
+    candidates = [path for path in candidates if path.is_file()]
+    return str(max(candidates, key=lambda path: path.stat().st_mtime)) if candidates else None
+
+
 def available_agents(config: dict[str, Any]) -> dict[str, bool]:
-    return {name: bool(shutil.which(options["command"])) for name, options in config["agents"].items() if options["enabled"]}
+    return {name: bool(resolve_command(options["command"])) for name, options in config["agents"].items() if options["enabled"]}

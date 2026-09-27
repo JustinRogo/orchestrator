@@ -3,12 +3,14 @@ from __future__ import annotations
 import json
 import os
 import re
-import shutil
 import subprocess
 import time
 from dataclasses import asdict, dataclass, field
 from pathlib import Path
 from typing import Any
+
+from .config import resolve_command
+from .process import console_flags
 
 
 @dataclass
@@ -109,7 +111,7 @@ class CLIAdapter:
         self.allowed_environment, self.timeout = allowed_environment, timeout
 
     def run(self, task: str, context: str, history: list[dict[str, Any]], worktree: Path) -> tuple[AgentResponse, dict[str, Any]]:
-        executable = shutil.which(self.settings["command"])
+        executable = resolve_command(self.settings["command"])
         if not executable:
             raise RuntimeError(f"{self.name} CLI not found: {self.settings['command']}")
         prompt = (f"Role: {self.settings['role']}\nTask: {task}\n\n{context}\n\n"
@@ -129,7 +131,8 @@ class CLIAdapter:
         start = time.monotonic()
         result = subprocess.run([executable, *args], input=prompt if self.settings["prompt_mode"] == "stdin" else None,
                                 cwd=worktree, env=env, text=True, encoding="utf-8", errors="replace",
-                                capture_output=True, timeout=self.timeout, shell=False)
+                                capture_output=True, timeout=self.timeout, shell=False,
+                                creationflags=console_flags())
         elapsed = time.monotonic() - start
         response = parse_response(self.name, result.stdout, self.settings["format"])
         detail = {"prompt": prompt, "exit_code": result.returncode, "duration_seconds": elapsed,
