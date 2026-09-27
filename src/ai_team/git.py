@@ -4,6 +4,8 @@ import re
 import subprocess
 from pathlib import Path
 
+from .process import console_flags
+
 
 class GitWorkspaceManager:
     def __init__(self, root: Path):
@@ -13,7 +15,7 @@ class GitWorkspaceManager:
 
     def _git(self, *args: str, cwd: Path | None = None) -> str:
         result = subprocess.run(["git", *args], cwd=cwd or self.root, text=True,
-                                capture_output=True, check=False)
+                                capture_output=True, check=False, creationflags=console_flags())
         if result.returncode:
             raise RuntimeError(f"git {' '.join(args)}: {result.stderr.strip()}")
         return result.stdout.strip()
@@ -86,7 +88,8 @@ class CommandPolicy:
     def run_tests(self, path: Path, timeout: int = 300) -> list[dict[str, object]]:
         results = []
         for command in self.commands:
-            result = subprocess.run(command, cwd=path, text=True, capture_output=True, timeout=timeout, shell=False)
+            result = subprocess.run(command, cwd=path, text=True, capture_output=True, timeout=timeout, shell=False,
+                                    creationflags=console_flags())
             results.append({"command": command, "exit_code": result.returncode,
                             "stdout": result.stdout[-10000:], "stderr": result.stderr[-10000:]})
         return results

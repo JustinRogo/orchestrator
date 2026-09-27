@@ -34,6 +34,11 @@
     .main { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
     .topbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; border-bottom: 1px solid #283347; padding: 19px 28px; background: #0e1621; }
     .topbar-title { margin: 0; font-size: 14px; font-weight: 650; color: #dae5f3; }
+    .topbar-right { display: flex; align-items: center; gap: 10px; }
+    .quit { border: 1px solid #43546b; background: transparent; color: #9aabc0; border-radius: 999px; font-size: 11px; padding: 5px 11px; }
+    .quit:hover { color: #ffbeb9; border-color: #744a49; }
+    .stopped { position: fixed; inset: 0; background: #0b1018f2; display: grid; place-items: center; text-align: center; z-index: 20; padding: 24px; }
+    .stopped h2 { margin: 0 0 8px; font-size: 20px; }
     .local-tag { border: 1px solid #46655c; color: #a7dec8; border-radius: 999px; font-size: 11px; padding: 5px 9px; white-space: nowrap; }
     .content { flex: 1; min-height: 0; overflow: auto; padding: 28px; }
     .hero { display: flex; justify-content: space-between; align-items: start; gap: 16px; margin-bottom: 25px; }
@@ -101,17 +106,18 @@
       <section class="agents"><div class="section-label">Agents</div><div id="agents"></div></section>
     </aside>
     <main class="main">
-      <div class="topbar"><p class="topbar-title">Team workspace</p><span class="local-tag">● Local session</span></div>
+      <div class="topbar"><p id="project" class="topbar-title">Team workspace</p><span class="topbar-right"><span class="local-tag">● Local session</span><button id="quit" class="quit" type="button" title="Stop the local AI Team server">Quit</button></span></div>
       <div class="content">
         <div class="hero"><div><h1 id="title">Choose a task</h1><p class="subtitle" id="subtitle">Your agents' conversation appears here.</p></div><span id="status" class="status hidden"></span></div>
         <div id="actions" class="actions hidden"><button id="retry" class="button">Retry failed turn</button><button id="resume" class="button">Resume</button><button id="stop" class="button danger">Stop after current turn</button><button id="refresh" class="button">Refresh</button></div>
         <div id="conversation" class="conversation"><div class="empty">Start a task below to bring Codex, Claude, and Antigravity into one conversation.</div></div>
       </div>
-      <div class="compose"><div id="mention-menu" class="mention-menu hidden" role="listbox" aria-label="Choose recipient"></div><label id="compose-label" for="prompt">Message this task</label><textarea id="prompt" placeholder="Type @ to choose an agent, or message everyone..."></textarea><div class="compose-footer"><span id="compose-hint" class="hint">To: Everyone · Type @ to choose a recipient</span><button id="send" class="button primary">Send message</button></div></div>
+      <div class="compose"><div id="mention-menu" class="mention-menu hidden" role="listbox" aria-label="Choose recipient"></div><label id="compose-label" for="prompt">Message this task</label><textarea id="prompt" placeholder="Type @ to choose an agent, or message everyone..."></textarea><div class="compose-footer"><span id="compose-hint" class="hint">To: Everyone · Type @ to choose a recipient · Ctrl+Enter to send</span><button id="send" class="button primary">Send message</button></div></div>
     </main>
     <aside class="inspector"><h2>Task details</h2><div class="card"><h3>Overview</h3><div id="overview-card" class="notice">Select a task to see its progress.</div></div><div class="card"><h3>Changed files</h3><ul id="files" class="file-list"><li>No task selected</li></ul></div><div class="card"><h3>Git diff</h3><div id="agent-tabs" class="segmented"></div><pre id="diff" class="diff">No changes to display.</pre></div><div class="card"><h3>Test results</h3><div id="tests" class="notice">No test results yet.</div></div></aside>
   </div>
   <div id="toast" class="toast hidden" role="alert"></div>
+  <div id="stopped" class="stopped hidden"><div><h2>AI Team has stopped</h2><p class="notice">You can close this tab. Open the dashboard again with your shortcut or <code>ai-team ui</code>.</p></div></div>
   <script>
     const TOKEN = "__AI_TEAM_TOKEN__";
     const $ = (id) => document.getElementById(id);
@@ -122,6 +128,8 @@
     let currentChanges = {};
     let refreshing = false;
     let tasks = [];
+    let firstLoad = true;
+    let poller = null;
     const drafts = new Map();
     const choices = [
       {label: "Everyone", recipient: "all"},
@@ -131,11 +139,22 @@
     ];
 
     async function api(path, options = {}) {
-      const response = await fetch(path, {
-        ...options,
-        headers: {"X-AI-Team-Token": TOKEN, ...(options.body ? {"Content-Type": "application/json"} : {})},
-        cache: "no-store"
-      });
+      let response;
+      try {
+        response = await fetch(path, {
+          ...options,
+          headers: {"X-AI-Team-Token": TOKEN, ...(options.body ? {"Content-Type": "application/json"} : {})},
+          cache: "no-store"
+        });
+      } catch (_) {
+        throw new Error("Can't reach the AI Team server. Relaunch it with your shortcut or ai-team ui.");
+      }
+      // A restarted server issues a new token, so reload to pick it up instead of failing every poll.
+      if (response.status === 403) {
+        try { sessionStorage.setItem("ai-team-draft", $("prompt").value); } catch (_) { /* Storage may be blocked. */ }
+        location.reload();
+        throw new Error("Reconnecting to AI Team...");
+      }
       const data = await response.json();
       if (!response.ok) throw new Error(data.error || "Request failed");
       return data;
@@ -322,8 +341,17 @@
       try {
         const overview = await api("/api/overview");
         tasks = overview.tasks;
-        if (!selected && !newChat && overview.tasks.length) selected = overview.tasks[0].id;
-        if (!selected && !overview.tasks.length) newChat = true;
+        $("project").textContent = overview.project.name;
+        $("project").title = overview.project.path;
+        document.title = `AI Team · ${overview.project.name}`;
+        if (firstLoad) {
+          // Open the task that needs attention; otherwise start in an empty composer.
+          const needsYou = tasks.find(task => task.active || ["running", "awaiting_human", "failed"].includes(task.status));
+          if (needsYou) selected = needsYou.id;
+          else newChat = true;
+        }
+        if (!selected && !newChat && tasks.length) selected = tasks[0].id;
+        if (!selected && !tasks.length) newChat = true;
         renderTasks(tasks);
         renderAgents(overview.agents, overview.usage, overview.quotas);
         if (newChat) renderNewChat();
@@ -333,7 +361,10 @@
           if (selected === id && !newChat) { renderTask(task); renderChanges(changes.changes); }
         }
       } catch (error) { showError(error); }
-      finally { refreshing = false; }
+      finally {
+        refreshing = false;
+        if (firstLoad) { firstLoad = false; $("prompt").focus(); }
+      }
     }
     async function action(name) {
       if (!selected) return;
@@ -357,7 +388,7 @@
       const text = $("prompt").value.trim();
       const match = text.match(/^@(everyone|all|codex|claude|gemini|antigravity)(?=$|[\s,:-])/i);
       const name = match ? (match[1].toLowerCase() === "all" ? "Everyone" : match[1]) : "Everyone";
-      $("compose-hint").textContent = `To: ${name} · Type @ to choose a recipient`;
+      $("compose-hint").textContent = `To: ${name} · Type @ to choose a recipient · Ctrl+Enter to send`;
     }
     function hideMentions() { $("mention-menu").classList.add("hidden"); }
     function showMentions() {
@@ -416,8 +447,22 @@
     $("resume").addEventListener("click", () => action("resume"));
     $("stop").addEventListener("click", () => action("stop"));
     $("refresh").addEventListener("click", refresh);
+    $("quit").addEventListener("click", async () => {
+      const running = tasks.filter(task => task.active).length;
+      const warning = running ? `${running} task${running > 1 ? "s are" : " is"} still running and will be interrupted. ` : "";
+      if (!confirm(`${warning}Stop the AI Team server?`)) return;
+      try {
+        await api("/api/shutdown", {method: "POST", body: "{}"});
+        clearInterval(poller);
+        $("stopped").classList.remove("hidden");
+      } catch (error) { showError(error); }
+    });
+    try {
+      $("prompt").value = sessionStorage.getItem("ai-team-draft") || "";
+      sessionStorage.removeItem("ai-team-draft");
+    } catch (_) { /* Storage may be blocked. */ }
     refresh();
-    setInterval(refresh, 3000);
+    poller = setInterval(refresh, 3000);
   </script>
 </body>
 </html>

@@ -1,5 +1,6 @@
 .ai-team/config.yaml
 .ai-team/state.sqlite3
+.ai-team/ui-port
 .ai-team/logs/
 .ai-team/worktrees/
 *.pyc

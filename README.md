@@ -18,7 +18,26 @@ ai-team review <task-id>
 
 ## Browser interface
 
-From the repository, run `ai-team ui` to open the local dashboard. Without an editable install, use `$env:PYTHONPATH = "src"` followed by `python -m ai_team ui`. The server binds only to `127.0.0.1` on port 8765 and opens your default browser. Use `--port 0` to choose an available port or `--no-browser` to print the address without opening a tab. Press Ctrl+C to stop the interface. The dashboard shows tasks, conversations, changed files, diffs, and test results; it can start, resume, retry, and stop tasks. Use the **+** button to open a blank task. The message box at the bottom sends to the open task; start a message with `@Codex`, `@Claude`, `@Gemini` (Antigravity), or `@Everyone` to choose recipients. Wait for an active turn to finish before sending another message. Stop takes effect after the current agent call. The agent sidebar shows tokens from each agent's latest recorded run and remaining plan quota. The server reads Codex account limits, Claude `/usage`, and Antigravity `/usage` on startup and after each agent turn. If a provider cannot return a quota, the last successful snapshot remains visible with its check time, or the sidebar says unavailable.
+### One-click launch (Windows)
+
+Run this once per project to put an **AI Team - <project>** shortcut on your desktop:
+
+```powershell
+$env:PYTHONPATH = "src"   # skip if installed with pip
+python -m ai_team --project C:\path\to\repo shortcut
+```
+
+Double-click the shortcut to open the dashboard with no console window. Right-click it to pin it to Start or the taskbar. The shortcut works without a pip install. Double-clicking it again while the dashboard is running reopens the existing dashboard instead of starting a second server. Use **Quit** in the dashboard's top bar to stop it. Startup errors appear in a dialog.
+
+### From a terminal
+
+Run `ai-team ui` anywhere inside a repository; without an editable install, use `$env:PYTHONPATH = "src"` followed by `python -m ai_team ui`. The first launch in a repository runs `init` automatically. The server binds only to `127.0.0.1`, starting at port 8765. Each project keeps a stable port, and relaunching reopens the running dashboard instead of starting another. If another program or project holds the port, the next free port up to 8774 is used. Use `--port 0` to choose any available port or `--no-browser` to print the address without opening a tab. Press Ctrl+C or use **Quit** to stop the interface. Stopping interrupts any agent turn in progress.
+
+The dashboard opens on the newest task that needs you (running, waiting for direction, or failed). Otherwise it opens a blank task with the message box focused, so you can type immediately. It shows tasks, conversations, changed files, diffs, and test results; it can start, resume, retry, and stop tasks. Use the **+** button to open a blank task. The message box at the bottom sends to the open task; start a message with `@Codex`, `@Claude`, `@Gemini` (Antigravity), or `@Everyone` to choose recipients, and press Ctrl+Enter to send. A task addressed to one agent needs only that agent's CLI installed. Wait for an active turn to finish before sending another message. Stop takes effect after the current agent call. The agent sidebar shows tokens from each agent's latest recorded run and remaining plan quota. The server reads Codex account limits, Claude `/usage`, and Antigravity `/usage` on startup and after each agent turn. If a provider cannot return a quota, the last successful snapshot remains visible with its check time, or the sidebar says unavailable.
+
+### Finding the agent CLIs
+
+Agent `command` values can stay as bare names (`codex`, `claude`, `agy`). The coordinator looks on PATH first and then in each installer's standard location: `%LOCALAPPDATA%\OpenAI\Codex\bin\<version>\codex.exe` (newest version), `~\.local\bin\claude.exe`, and `%LOCALAPPDATA%\agy\bin\agy.exe`. A configured absolute path that no longer exists, such as a Codex path from before an update, falls back to the same search.
 
 `init` creates `.ai-team/config.yaml` and editable context files. Edit the command paths and flags there to match your installed CLI versions. `start --role codex="..."` overrides an agent's role for one task. Use `ai-team resume <task-id>` for a persisted queued task; `stop` halts it; `cleanup` removes only clean worktrees and preserves task history. `--project PATH` targets another Git repository.
 

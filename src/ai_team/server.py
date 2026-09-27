@@ -1,9 +1,12 @@
 """Small localhost web interface for the existing coordinator."""
 from __future__ import annotations
 
+import http.client
 import json
+import os
 import re
 import secrets
+import socket
 import threading
 import webbrowser
 from contextlib import contextmanager
@@ -14,11 +17,13 @@ from pathlib import Path
 from typing import Any, Iterator
 from urllib.parse import urlsplit
 
-from .config import available_agents, load
+from .config import available_agents, load, team_dir
 from .coordinator import Coordinator
 from .quota import collect as collect_quota
 
 
+DEFAULT_PORT = 8765
+PORT_ATTEMPTS = 10
 TASK_PATH = re.compile(r"^/api/tasks/([a-f0-9]{12})(?:/(diff|resume|retry|stop|guide|message))?$")
 MAX_BODY_BYTES = 32_768
 
@@ -47,6 +52,7 @@ class WebApp:
         with self.lock:
             active = set(self.active)
         return {
+            "project": {"name": self.root.name, "path": str(self.root)},
             "agents": available_agents(config),
             "usage": usage,
             "quotas": quotas,
@@ -104,9 +110,10 @@ class WebApp:
         )):
             raise ValueError("Invalid agent roles")
         config = load(self.root)
-        missing = [name for name, found in available_agents(config).items() if not found]
+        agents = available_agents(config)
+        missing = [name for name, found in agents.items() if not found and recipient in {"all", name}]
         if missing:
-            raise ValueError(f"Required CLIs missing: {', '.join(missing)}")
+            raise ValueError(f"Required CLIs missing: {', '.join(missing)}. Set their command paths in .ai-team/config.yaml.")
         with self.coordinator() as coordinator:
             task = coordinator.create(prompt, roles, recipient)
         self._launch(task["id"], "resume")
@@ -177,7 +184,18 @@ class WebApp:
                 self.active.discard(task_id)
 
 
-def make_server(root: Path, port: int = 8765, token: str | None = None) -> ThreadingHTTPServer:
+class LocalServer(ThreadingHTTPServer):
+    # Windows SO_REUSEADDR lets a second process bind a port that is already listening,
+    # which would silently split requests between two dashboards.
+    allow_reuse_address = os.name != "nt"
+
+    def server_bind(self) -> None:
+        if os.name == "nt":
+            self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
+        super().server_bind()
+
+
+def make_server(root: Path, port: int = DEFAULT_PORT, token: str | None = None) -> ThreadingHTTPServer:
     app = WebApp(root, token)
 
     class Handler(BaseHTTPRequestHandler):
@@ -204,11 +222,16 @@ def make_server(root: Path, port: int = 8765, token: str | None = None) -> Threa
 
         def do_GET(self) -> None:
             path = urlsplit(self.path).path
-            if path == "/":
+            if path in {"/", "/api/ping"}:
                 host = self.headers.get("Host", "")
                 if host not in {f"127.0.0.1:{self.server.server_port}", f"localhost:{self.server.server_port}"}:
                     self._error(HTTPStatus.FORBIDDEN, "Invalid host")
                     return
+            if path == "/api/ping":
+                # Unauthenticated so a second launch can find this dashboard instead of starting another.
+                self._json(HTTPStatus.OK, {"app": "ai-team", "root": str(app.root)})
+                return
+            if path == "/":
                 page = files("ai_team").joinpath("web/index.html").read_text(encoding="utf-8")
                 encoded = page.replace("__AI_TEAM_TOKEN__", app.token).encode("utf-8")
                 self.send_response(HTTPStatus.OK)
@@ -261,6 +284,10 @@ def make_server(root: Path, port: int = 8765, token: str | None = None) -> Threa
                 if not isinstance(body, dict):
                     raise ValueError("Expected a JSON object")
                 path = urlsplit(self.path).path
+                if path == "/api/shutdown":
+                    self._json(HTTPStatus.ACCEPTED, {"action": "shutdown"})
+                    threading.Thread(target=self.server.shutdown, daemon=True).start()
+                    return
                 if path == "/api/tasks":
                     task_id = app.create(body.get("prompt"), body.get("roles"), body.get("recipient", "all"))
                     self._json(HTTPStatus.ACCEPTED, {"task_id": task_id})
@@ -284,17 +311,61 @@ def make_server(root: Path, port: int = 8765, token: str | None = None) -> Threa
             except Exception:
                 self._error(HTTPStatus.INTERNAL_SERVER_ERROR, "Unable to run action")
 
-    server = ThreadingHTTPServer(("127.0.0.1", port), Handler)
+    server = LocalServer(("127.0.0.1", port), Handler)
     server.app = app  # type: ignore[attr-defined]
     return server
 
 
-def run_ui(root: Path, port: int = 8765, open_browser: bool = True) -> None:
-    server = make_server(root, port)
+def running_instance(root: Path, port: int) -> bool:
+    """Return whether the dashboard for this project is already listening on port."""
+    connection = http.client.HTTPConnection("127.0.0.1", port, timeout=1)
+    try:
+        connection.request("GET", "/api/ping")
+        response = connection.getresponse()
+        data = json.loads(response.read())
+        return response.status == 200 and data.get("app") == "ai-team" and Path(data["root"]) == root.resolve()
+    except (OSError, ValueError, KeyError, TypeError):
+        return False
+    finally:
+        connection.close()
+
+
+def _reopen(root: Path, port: int, open_browser: bool) -> bool:
+    if not running_instance(root, port):
+        return False
+    url = f"http://127.0.0.1:{port}/"
+    print(f"AI Team is already running at {url}")
+    if open_browser:
+        webbrowser.open(url)
+    return True
+
+
+def run_ui(root: Path, port: int = DEFAULT_PORT, open_browser: bool = True) -> None:
+    # A nonzero port starts a short search so each project keeps a stable address and a
+    # second launch reopens the existing dashboard. Port 0 always picks a fresh free port.
+    port_file = team_dir(root) / "ui-port"
+    try:
+        recorded = int(port_file.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        recorded = None
+    if port and recorded and _reopen(root, recorded, open_browser):
+        return
+    server = None
+    for candidate in range(port, port + PORT_ATTEMPTS) if port else [0]:
+        try:
+            server = make_server(root, candidate)
+            break
+        except OSError:
+            # Binding first keeps a normal launch instant; probing a closed port on Windows takes a second.
+            if candidate and _reopen(root, candidate, open_browser):
+                return
+    if server is None:
+        raise RuntimeError(f"Ports {port}-{port + PORT_ATTEMPTS - 1} are in use; pass --port 0 to pick a free port")
+    port_file.write_text(str(server.server_port), encoding="utf-8")
     threading.Thread(target=server.app.refresh_quotas, daemon=True, name="ai-team-usage").start()  # type: ignore[attr-defined]
     url = f"http://127.0.0.1:{server.server_port}/"
     print(f"AI Team is running at {url}")
-    print("Press Ctrl+C to stop the interface. Agent turns already running will finish their current call.")
+    print("Press Ctrl+C or use Quit in the dashboard to stop. Agent turns still running are interrupted on exit.")
     if open_browser:
         threading.Timer(0.4, lambda: webbrowser.open(url)).start()
     try:
@@ -303,3 +374,4 @@ def run_ui(root: Path, port: int = 8765, open_browser: bool = True) -> None:
         pass
     finally:
         server.server_close()
+        port_file.unlink(missing_ok=True)
