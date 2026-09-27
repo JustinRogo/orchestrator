@@ -116,6 +116,40 @@ class FlowTests(unittest.TestCase):
         self.assertEqual(task["turn_count"], 5)
         self.assertEqual(task["status"], "review_ready")
 
+    def test_disagreement_does_not_strand_queued_reviewers(self):
+        FakeAdapter.scripted = {
+            "codex": [AgentResponse("codex", "Implemented", status="complete")],
+            "claude": [AgentResponse("claude", "I disagree", status="disagree")],
+            "gemini": [AgentResponse("gemini", "Independent review", status="complete")],
+        }
+        task = self.coordinator().start("Review the change")
+        self.assertEqual([agent for agent, _ in FakeAdapter.calls], ["codex", "claude", "gemini"])
+        self.assertEqual(task["queue"], [])
+        self.assertEqual(task["status"], "review_ready")
+
+    def test_blocked_still_pauses_before_other_reviewers(self):
+        FakeAdapter.scripted = {
+            "codex": [AgentResponse("codex", "Need input", status="blocked")],
+        }
+        task = self.coordinator().start("Review the change")
+        self.assertEqual(task["status"], "awaiting_human")
+        self.assertEqual([item["agent"] for item in task["queue"]], ["claude", "gemini"])
+
+    def test_new_message_replaces_pending_turns_for_its_recipients(self):
+        coordinator = self.coordinator()
+        task = coordinator.create("Original review")
+        task["status"] = "awaiting_human"
+        coordinator.store.save_task(task)
+        updated = coordinator.send_message(task["id"], "New direction", "claude")
+        self.assertEqual([(item["agent"], item["task"]) for item in updated["queue"]],
+                         [("claude", "New direction"), ("codex", "Original review"),
+                          ("gemini", "Original review")])
+        updated["status"] = "awaiting_human"
+        coordinator.store.save_task(updated)
+        updated = coordinator.send_message(task["id"], "Team update")
+        self.assertEqual([(item["agent"], item["task"]) for item in updated["queue"]],
+                         [(agent, "Team update") for agent in ("codex", "claude", "gemini")])
+
     def test_structured_and_mention_parsing(self):
         response = parse_response("claude", '{"message":"issue","delegate_to":"codex","delegated_task":"Fix it","status":"working"}', "claude-json")
         self.assertEqual((response.requested_agent, response.requested_task), ("codex", "Fix it"))

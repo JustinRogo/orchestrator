@@ -60,8 +60,13 @@
     .message.user { grid-template-columns: minmax(0, 82%) 36px; justify-content: end; }
     .message.user .message-body { background: #222b42; border-color: #4a5679; }
     .avatar { width: 36px; height: 36px; border-radius: 11px; display: grid; place-items: center; font-size: 12px; font-weight: 800; color: #10161e; }
-    .avatar.codex { background: #b7edbb; }.avatar.claude { background: #e8b59f; }.avatar.gemini { background: #aac8fa; }.avatar.user { background: #e2d6fc; }.avatar.system { background: #ffc9a5; }
+    .avatar.codex { background: #77dfb0; }.avatar.claude { background: #f2ad83; }.avatar.gemini { background: #b4a3ff; }.avatar.user { background: #e2d6fc; }.avatar.system { background: #ffc9a5; }
     .message-body { min-width: 0; border: 1px solid #273449; border-radius: 13px; background: #131e2c; padding: 13px 16px 15px; }
+    .message.codex { --agent-accent: #77dfb0; --agent-border: #36765e; --agent-surface: #142d2b; }
+    .message.claude { --agent-accent: #f2ad83; --agent-border: #815a48; --agent-surface: #30241f; }
+    .message.gemini { --agent-accent: #b4a3ff; --agent-border: #615594; --agent-surface: #25233b; }
+    .message.codex .message-body, .message.claude .message-body, .message.gemini .message-body { background: var(--agent-surface); border-color: var(--agent-border); border-left: 3px solid var(--agent-accent); }
+    .message.codex .sender, .message.claude .sender, .message.gemini .sender { color: var(--agent-accent); }
     .message-head { display: flex; align-items: center; gap: 10px; margin-bottom: 9px; }
     .sender { font-size: 12px; font-weight: 750; text-transform: uppercase; letter-spacing: .06em; }
     .recipient, .time { color: #8194ac; font-size: 11px; }
@@ -216,7 +221,8 @@
       if (!messages.length) { container.append(node("div", "empty", "No messages yet.")); return; }
       for (const message of messages) {
         const isUser = message.sender === "human";
-        const card = node("article", "message" + (isUser ? " user" : ""));
+        const agentClass = ["codex", "claude", "gemini"].includes(message.sender) ? ` ${message.sender}` : "";
+        const card = node("article", "message" + (isUser ? " user" : agentClass));
         const avatar = node("div", `avatar ${isUser ? "user" : message.sender}`, isUser ? "U" : message.sender.slice(0, 1).toUpperCase());
         const body = node("div", "message-body");
         const head = node("div", "message-head");
@@ -243,7 +249,14 @@
     function renderOverview(task) {
       const container = $("overview-card");
       container.replaceChildren();
-      for (const [label, value] of [["Task ID", task.id], ["Status", task.active ? "Running" : task.status.replaceAll("_", " ")], ["Agent turns", String(task.turn_count)], ["Round", `${task.current_round} / ${task.max_rounds}`]]) {
+      const agentName = name => name === "gemini" ? "Antigravity" : name[0].toUpperCase() + name.slice(1);
+      const pending = task.queue || [];
+      const running = task.active && pending.length ? pending[0].agent : null;
+      const queued = running ? pending.slice(1) : pending;
+      const rows = [["Task ID", task.id], ["Status", task.active ? "Running" : task.status.replaceAll("_", " ")], ["Agent turns", String(task.turn_count)], ["Round", `${task.current_round} / ${task.max_rounds}`]];
+      if (running) rows.push(["Running agent", agentName(running)]);
+      rows.push(["Queued agents", queued.length ? queued.map(item => agentName(item.agent)).join(", ") : "None"]);
+      for (const [label, value] of rows) {
         const row = node("div", "info-row");
         row.append(node("span", "", label), node("span", "value", value));
         container.append(row);

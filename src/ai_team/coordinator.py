@@ -122,7 +122,7 @@ class Coordinator:
                 task["queue"].insert(0, item)
                 task["status"] = "failed"
                 break
-            if response.status in {"blocked", "disagree"}:
+            if response.status == "blocked":
                 task["status"] = "awaiting_human"
                 break
             self._delegate(task, response, item["round"])
@@ -200,8 +200,11 @@ class Coordinator:
         task["max_rounds"] = max(task["max_rounds"], next_round,
                                  *(item["round"] for item in task["queue"]))
         task["git_state"]["extra_turns"] = task["git_state"].get("extra_turns", 0) + len(recipients)
+        # New guidance supersedes pending work for its recipients. Keep turns for
+        # other agents, including reviewers who have not spoken yet.
         task["queue"] = ([{"agent": name, "task": message.strip(), "source": "human", "round": next_round}
-                          for name in recipients] + task["queue"])
+                          for name in recipients]
+                         + [item for item in task["queue"] if item["agent"] not in recipients])
         task["status"] = "running"
         self.store.add_message(task_id, "human", recipient, message.strip())
         self.store.save_task(task)
