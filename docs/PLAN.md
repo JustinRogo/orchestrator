@@ -10,7 +10,7 @@ Uncertainties to verify with live calls: Claude's exact JSON envelope, authentic
 
 `src/ai_team/config.py` loads `.ai-team/config.yaml`; `store.py` persists tasks, messages, and invocations in SQLite; `git.py` manages worktrees and allowed test commands; `adapters.py` invokes CLIs; `coordinator.py` builds bounded context and runs the conversation; `cli.py` exposes commands. `.ai-team/` also stores project context, decisions, artifacts, and JSONL logs.
 
-For each task, enabled agents receive separate worktrees under `.ai-team/worktrees/<task-id>/<agent>` on `agent/<agent>/<task-id>` branches. Codex runs first, then Claude, then Gemini. Each receives recent messages. Review agents also receive the primary worktree's current diff. The coordinator accepts structured `delegate_to` and `delegated_task` first, then leading `@agent` or `@all` lines. It rejects empty, repeated, disabled, or self delegations, and bounds turns and rounds. All responses and CLI details are persisted. No merge path exists.
+For each task, enabled agents receive separate worktrees under `.ai-team/worktrees/<task-id>/<agent>` on `agent/<agent>/<task-id>` branches. Codex runs first by default; a selected implementor runs first when task-level roles are provided. Each receives recent messages. Review agents also receive the implementor worktree's current diff. The coordinator accepts structured `delegate_to` and `delegated_task` first, then leading `@agent` or `@all` lines. It rejects empty, repeated, disabled, or self delegations, and bounds turns and rounds. All responses and CLI details are persisted. No merge path exists yet; the approval workflow is tracked in the [roadmap backlog](#roadmap-backlog).
 
 ## Risks and limits
 
@@ -21,4 +21,17 @@ Git worktrees isolate working directories, not operating-system access. CLI agen
 1. Implement and test the fixed Codex → Claude → Gemini conversation and persistence.
 2. Add bounded structured and mention-based delegation, review and inspection commands, and worktree lifecycle.
 3. Verify live CLI invocation and authentication; refine permission settings and JSON parsers if the installed versions differ from documented outputs.
-4. Later: human decision workflow, merge approval, web interface, streaming, parallelism, cost budgets, and stronger process isolation.
+4. Human decision workflow and web interface: implemented. The coordinator can pause in `awaiting_human`, accept guidance, and serve the local dashboard through `ai-team ui`.
+
+## Roadmap backlog
+
+Cost budgets are implemented below. The remaining items are deferred. Their order is not a priority ranking.
+
+- **Merge approval and automated merge workflow.** Add an explicit human approval step that identifies the source branch, target branch, and exact diff to merge. Recheck the branches and worktree state when approval is acted on, report conflicts without discarding changes, and record the decision. `git.auto_merge` remains disabled until this workflow exists.
+- **Streaming agent output.** Deliver incremental output from an active CLI invocation to the dashboard while retaining the complete raw output and parsed final response in the task record. Handle partial JSONL records, disconnects, and process termination.
+- **Parallel agent runs.** Run independent agent turns concurrently while preserving per-agent worktree isolation, bounded turns and rounds, deterministic conversation records, and stop behavior. Turns that depend on another agent's result must wait for it.
+- **Stronger process isolation.** Restrict each agent process to the intended worktree and required resources at the operating-system level. Document supported platforms and verify that file and network access outside the policy is denied.
+
+## Cost budgets
+
+Set `limits.budget.tokens` and/or `limits.budget.cost_usd` in `.ai-team/config.yaml` to positive limits; both default to `null` (disabled). Each new task keeps a snapshot of those limits. Recorded invocation usage is summed before every turn. A reached limit pauses the task in `awaiting_human` before another CLI starts, with the queued turn preserved. Missing or invalid token usage under a token limit, or missing or invalid provider cost data under a cost limit, also pauses for human review. CLI chat/review and the dashboard show used and remaining amounts. A turn can exceed its limit because its usage is known only after the provider returns; the next turn is then stopped. Account rate-limit snapshots are separate from these budgets.

@@ -31,6 +31,8 @@
     .agent-usage { color: #8194ac; font-size: 11px; line-height: 1.5; margin: 4px 0 0 16px; }
     .dot { width: 8px; height: 8px; border-radius: 50%; display: inline-block; margin-right: 7px; background: #63748b; }
     .dot.ready { background: #b4e27e; box-shadow: 0 0 10px #b4e27e66; }
+    .dot.busy { background: #f2ad83; box-shadow: 0 0 10px #f2ad83aa; animation: pulse 1.2s ease-in-out infinite; }
+    @keyframes pulse { 50% { opacity: .35; transform: scale(.8); } }
     .main { min-width: 0; min-height: 0; display: flex; flex-direction: column; }
     .topbar { display: flex; align-items: center; justify-content: space-between; gap: 16px; border-bottom: 1px solid #283347; padding: 19px 28px; background: #0e1621; }
     .topbar-title { margin: 0; font-size: 14px; font-weight: 650; color: #dae5f3; }
@@ -74,6 +76,9 @@
     .message-text { margin: 0; font: 12.5px/1.65 ui-monospace, SFMono-Regular, Consolas, monospace; white-space: pre-wrap; overflow-wrap: anywhere; color: #d4deec; }
     .empty { color: #9eb0c5; border: 1px dashed #3b4b61; border-radius: 13px; padding: 26px; font-size: 13px; }
     .compose { border-top: 1px solid #283347; padding: 18px 28px 24px; background: #101925; }
+    .role-picker { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; margin-bottom: 14px; }
+    .role-picker label { display: grid !important; gap: 5px; margin: 0 !important; color: #9eb0c5; }
+    .role-picker select { width: 100%; }
     .compose label { display: block; font-size: 12px; font-weight: 700; margin-bottom: 9px; }
     textarea { width: 100%; min-height: 76px; max-height: 220px; resize: vertical; background: #0b1420; border: 1px solid #3a4b62; border-radius: 10px; color: #e8f1fb; padding: 12px; font-size: 13px; outline: none; }
     select { background: #0b1420; border: 1px solid #3a4b62; border-radius: 9px; color: #e8f1fb; padding: 9px; }
@@ -117,7 +122,7 @@
         <div id="actions" class="actions hidden"><button id="retry" class="button">Retry failed turn</button><button id="resume" class="button">Resume</button><button id="stop" class="button danger">Stop after current turn</button><button id="refresh" class="button">Refresh</button></div>
         <div id="conversation" class="conversation"><div class="empty">Start a task below to bring Codex, Claude, and Antigravity into one conversation.</div></div>
       </div>
-      <div class="compose"><div id="mention-menu" class="mention-menu hidden" role="listbox" aria-label="Choose recipient"></div><label id="compose-label" for="prompt">Message this task</label><textarea id="prompt" placeholder="Type @ to choose an agent, or message everyone..."></textarea><div class="compose-footer"><span id="compose-hint" class="hint">To: Everyone · Type @ to choose a recipient · Ctrl+Enter to send</span><button id="send" class="button primary">Send message</button></div></div>
+      <div class="compose"><div id="role-picker" class="role-picker hidden" aria-label="Agent roles"></div><div id="mention-menu" class="mention-menu hidden" role="listbox" aria-label="Choose recipient"></div><label id="compose-label" for="prompt">Message this task</label><textarea id="prompt" placeholder="Type @ to choose an agent, or message everyone..."></textarea><div class="compose-footer"><span id="compose-hint" class="hint">To: Everyone · Type @ to choose a recipient · Ctrl+Enter to send</span><button id="send" class="button primary">Send message</button></div></div>
     </main>
     <aside class="inspector"><h2>Task details</h2><div class="card"><h3>Overview</h3><div id="overview-card" class="notice">Select a task to see its progress.</div></div><div class="card"><h3>Changed files</h3><ul id="files" class="file-list"><li>No task selected</li></ul></div><div class="card"><h3>Git diff</h3><div id="agent-tabs" class="segmented"></div><pre id="diff" class="diff">No changes to display.</pre></div><div class="card"><h3>Test results</h3><div id="tests" class="notice">No test results yet.</div></div></aside>
   </div>
@@ -134,6 +139,9 @@
     let refreshing = false;
     let tasks = [];
     let firstLoad = true;
+    let agentAvailability = {};
+    let activity = {};
+    let defaultRoles = {};
     let poller = null;
     const drafts = new Map();
     const choices = [
@@ -176,6 +184,35 @@
       if (text !== undefined) element.textContent = text;
       return element;
     }
+    function displayName(name) { return name === "gemini" ? "Antigravity" : name[0].toUpperCase() + name.slice(1); }
+    function selectedRoles() {
+      return Object.fromEntries([...$("role-picker").querySelectorAll("select")].map(select => [select.dataset.agent, select.value]));
+    }
+    function renderRolePicker() {
+      const picker = $("role-picker");
+      const previous = selectedRoles();
+      picker.replaceChildren();
+      for (const name of Object.keys(agentAvailability)) {
+        const label = node("label", "", displayName(name));
+        const select = node("select");
+        select.dataset.agent = name;
+        for (const [value, title] of Object.entries({implementation: "Implementor", "q&a": "Q&A", review: "Reviewer", qa: "QA"})) {
+          const option = node("option", "", title);
+          option.value = value;
+          select.append(option);
+        }
+        const configured = (defaultRoles[name] || "").toLowerCase();
+        select.value = previous[name] || (configured === "implementation" ? "implementation" : configured.includes("qa") ? "qa" : "review");
+        label.append(select);
+        select.addEventListener("change", () => {
+          if (select.value === "implementation") for (const other of picker.querySelectorAll("select")) {
+            if (other !== select && other.value === "implementation") other.value = "q&a";
+          }
+        });
+        picker.append(label);
+      }
+      picker.classList.toggle("hidden", !newChat);
+    }
     function renderTasks(tasks) {
       const list = $("task-list");
       list.replaceChildren();
@@ -184,7 +221,8 @@
         const button = node("button", "task-item" + (task.id === selected ? " selected" : ""));
         button.append(node("span", "task-title", task.title));
         const meta = node("span", "task-meta");
-        meta.append(node("span", "", task.active ? "Running" : task.status.replaceAll("_", " ")));
+        const live = activity[task.id];
+        meta.append(node("span", "", live?.agent ? `${displayName(live.agent)} ${live.stage}` : task.active ? "Starting" : task.status.replaceAll("_", " ")));
         meta.append(node("span", "", `${task.turn_count} turns`));
         button.append(meta);
         button.addEventListener("click", () => switchChat(task.id));
@@ -198,9 +236,10 @@
         const row = node("div", "agent-row");
         const top = node("div", "agent-top");
         const label = node("span");
-        label.append(node("span", "dot" + (ready ? " ready" : "")));
+        const busy = Object.values(activity).some(item => item.agent === name);
+        label.append(node("span", "dot" + (busy ? " busy" : ready ? " ready" : "")));
         label.append(document.createTextNode(name === "gemini" ? "Antigravity" : name[0].toUpperCase() + name.slice(1)));
-        top.append(label, node("span", "", ready ? "Ready" : "Missing"));
+        top.append(label, node("span", "", busy ? "Active" : ready ? "Ready" : "Missing"));
         row.append(top);
         const count = usage?.[name];
         row.append(node("div", "agent-usage", `Latest run: ${typeof count === "number" ? count.toLocaleString() + " tokens" : "—"}`));
@@ -251,10 +290,17 @@
       container.replaceChildren();
       const agentName = name => name === "gemini" ? "Antigravity" : name[0].toUpperCase() + name.slice(1);
       const pending = task.queue || [];
-      const running = task.active && pending.length ? pending[0].agent : null;
-      const queued = running ? pending.slice(1) : pending;
+      const running = task.activity?.agent || null;
+      const queued = running && pending[0]?.agent === running ? pending.slice(1) : pending;
       const rows = [["Task ID", task.id], ["Status", task.active ? "Running" : task.status.replaceAll("_", " ")], ["Agent turns", String(task.turn_count)], ["Round", `${task.current_round} / ${task.max_rounds}`]];
-      if (running) rows.push(["Running agent", agentName(running)]);
+      const budget = task.budget_summary;
+      if (budget) for (const [key, label, unit] of [["tokens", "Token budget", ""], ["cost_usd", "Cost budget", "$"]]) {
+        const limit = budget.limit[key];
+        if (limit !== null) rows.push([label, `Used ${budget.used[key] === null ? "unknown" : unit + budget.used[key]} · Remaining ${budget.remaining[key] === null ? "unknown" : unit + budget.remaining[key]} of ${unit}${limit}`]);
+      }
+      if (task.pause_reason) rows.push(["Pause reason", task.pause_reason]);
+      if (running) rows.push(["Current activity", `${agentName(running)} ${task.activity.stage}`]);
+      for (const [agent, role] of Object.entries(task.roles || {})) rows.push([`${agentName(agent)} role`, role === "implementation" ? "Implementor" : role === "q&a" ? "Q&A" : role === "qa" ? "QA" : "Reviewer"]);
       rows.push(["Queued agents", queued.length ? queued.map(item => agentName(item.agent)).join(", ") : "None"]);
       for (const [label, value] of rows) {
         const row = node("div", "info-row");
@@ -296,9 +342,10 @@
       $("title").textContent = task.title;
       $("subtitle").textContent = `Task ${task.id} · ${task.turn_count} agent turns`;
       const status = $("status");
-      status.textContent = task.active ? "Running" : task.status.replaceAll("_", " ");
+      status.textContent = task.activity?.agent ? `${task.activity.agent === "gemini" ? "Antigravity" : task.activity.agent} ${task.activity.stage}` : task.active ? "Starting" : task.status.replaceAll("_", " ");
       status.className = `status ${task.active ? "running" : task.status}`;
       $("actions").classList.remove("hidden");
+      $("role-picker").classList.add("hidden");
       $("retry").disabled = task.active || !task.can_retry;
       $("resume").disabled = task.active || task.status !== "running";
       $("stop").disabled = task.status !== "running";
@@ -317,6 +364,7 @@
       $("subtitle").textContent = "Start a fresh conversation with one agent or the whole team.";
       $("status").classList.add("hidden");
       $("actions").classList.add("hidden");
+      renderRolePicker();
       $("conversation").replaceChildren(node("div", "empty", "Write your first message below. Type @ to choose who receives it."));
       $("overview-card").textContent = "A new task will be created when you send your first message.";
       $("files").replaceChildren(node("li", "", "No task selected"));
@@ -354,6 +402,9 @@
       try {
         const overview = await api("/api/overview");
         tasks = overview.tasks;
+        agentAvailability = overview.agents;
+        activity = overview.activity || {};
+        defaultRoles = overview.default_roles || {};
         $("project").textContent = overview.project.name;
         $("project").title = overview.project.path;
         document.title = `AI Team · ${overview.project.name}`;
@@ -445,7 +496,7 @@
       try {
         const creating = newChat;
         const result = creating
-          ? await api("/api/tasks", {method: "POST", body: JSON.stringify({prompt: parsed.message, recipient: parsed.recipient})})
+          ? await api("/api/tasks", {method: "POST", body: JSON.stringify({prompt: parsed.message, recipient: parsed.recipient, roles: selectedRoles()})})
           : await api(`/api/tasks/${selected}/message`, {method: "POST", body: JSON.stringify(parsed)});
         drafts.delete(draftKey());
         $("prompt").value = "";

@@ -22,7 +22,8 @@ def parser() -> argparse.ArgumentParser:
     sub.add_parser("shortcut", help="Create a desktop shortcut that opens the interface for this project")
     start = sub.add_parser("start")
     start.add_argument("prompt")
-    start.add_argument("--role", action="append", default=[], metavar="AGENT=ROLE")
+    start.add_argument("--role", action="append", default=[], metavar="AGENT=ROLE",
+                       help="Assign implementation, q&a, review, or qa to an agent")
     sub.add_parser("status")
     for name in ("chat", "resume", "retry", "diff", "review", "stop", "cleanup"):
         command = sub.add_parser(name)
@@ -33,6 +34,17 @@ def parser() -> argparse.ArgumentParser:
 def show_chat(coordinator: Coordinator, task_id: str) -> None:
     task = coordinator.store.get_task(task_id)
     print(f"Task {task_id} [{task['status']}] - {task['title']}")
+    budget = coordinator.store.budget_summary(task)
+    for key, label, unit in (("tokens", "Tokens", ""), ("cost_usd", "Cost", "$")):
+        limit = budget["limit"][key]
+        if limit is not None:
+            used = budget["used"][key]
+            remaining = budget["remaining"][key]
+            print(f"{label} budget: used {unit}{used if used is not None else 'unknown'}, "
+                  f"remaining {unit}{remaining if remaining is not None else 'unknown'} "
+                  f"of {unit}{limit}")
+    if task["pause_reason"]:
+        print(f"Pause reason: {task['pause_reason']}")
     for message in coordinator.store.messages(task_id):
         print(f"\n[{message['sender'].upper()} -> {message['recipient'].upper() if message['recipient'] else 'ALL'}]\n{message['content']}")
     if task["status"] == "awaiting_human":
@@ -116,7 +128,10 @@ def main(argv: list[str] | None = None) -> int:
             from .server import run_ui
             run_ui(root, args.port, not args.no_browser)
             return 0
-        coordinator = Coordinator(root, config)
+        def activity(_task_id: str, agent: str, stage: str) -> None:
+            if args.command in {"start", "resume", "retry"}:
+                print(f"{agent}: {stage}...", flush=True)
+        coordinator = Coordinator(root, config, activity=activity)
         if args.command == "start":
             roles = {}
             for entry in args.role:
@@ -133,6 +148,12 @@ def main(argv: list[str] | None = None) -> int:
         elif args.command == "status":
             for task in coordinator.store.list_tasks():
                 print(f"{task['id']}  {task['status']:<15} {task['turn_count']} turns  {task['title']}")
+                budget = coordinator.store.budget_summary(task)
+                for key, label in (("tokens", "tokens"), ("cost_usd", "USD")):
+                    if budget["limit"][key] is not None:
+                        print(f"  {label}: used {budget['used'][key]}, remaining {budget['remaining'][key]}")
+                if task["pause_reason"]:
+                    print(f"  {task['pause_reason']}")
         elif args.command == "chat":
             show_chat(coordinator, args.task_id)
         elif args.command == "resume":

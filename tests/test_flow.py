@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import copy
+import contextlib
+import io
 import json
 import subprocess
 import sys
@@ -11,8 +13,10 @@ from pathlib import Path
 from unittest.mock import patch
 
 from ai_team.adapters import AgentResponse, CLIAdapter, filtered_environment, parse_response
-from ai_team.config import DEFAULT_CONFIG, initialize
+from ai_team.config import DEFAULT_CONFIG, initialize, load
+from ai_team.cli import show_chat
 from ai_team.coordinator import Coordinator
+from ai_team.roles import turn_settings
 
 
 def git(root: Path, *args: str) -> None:
@@ -102,6 +106,86 @@ class FlowTests(unittest.TestCase):
         self.assertTrue((self.root / ".ai-team" / "logs" / f"{task['id']}.jsonl").exists())
         self.assertEqual(self.coordinator().store.get_task(task["id"])["turn_count"], 3)
 
+    def test_roles_change_turn_order_permissions_and_review_source(self):
+        roles = {"codex": "q&a", "claude": "implementation", "gemini": "qa"}
+        FakeAdapter.scripted = {name: [AgentResponse(name, "Done", status="complete")]
+                                for name in roles}
+        coordinator = self.coordinator()
+        events = []
+        coordinator.activity = lambda task_id, agent, stage: events.append((agent, stage))
+        task = coordinator.start("Implement feature", roles)
+        self.assertEqual([name for name, _ in FakeAdapter.calls], ["claude", "codex", "gemini"])
+        self.assertEqual(task["roles"], roles)
+        self.assertTrue(turn_settings("codex", task, self.config)["read_only"])
+        self.assertIn("read-only", turn_settings("codex", task, self.config)["args"])
+        self.assertFalse(turn_settings("claude", task, self.config)["read_only"])
+        self.assertIn("acceptEdits", turn_settings("claude", task, self.config)["args"])
+        alternate = {**task, "roles": {"gemini": "implementation", "codex": "q&a", "claude": "review"}}
+        self.assertIn("accept-edits", turn_settings("gemini", alternate, self.config)["args"])
+        self.assertIn(("claude", "thinking and responding"), events)
+        self.assertEqual(events[-1], ("", "idle"))
+
+    def test_swapped_implementor_edits_runs_tests_and_reviewers_cannot_edit(self):
+        self.config["execution"]["tests"] = [[sys.executable, "-c",
+            "from pathlib import Path; assert Path('feature.txt').read_text() == 'built'"]]
+
+        class EditingAdapter(FakeAdapter):
+            def run(self, task, context, history, worktree):
+                self.calls.append((self.name, context))
+                if self.name == "claude":
+                    (worktree / "feature.txt").write_text("built", encoding="utf-8")
+                elif self.name == "codex":
+                    (worktree / "intrusion.txt").write_text("changed", encoding="utf-8")
+                return AgentResponse(self.name, "Done", status="complete"), {
+                    "prompt": context, "exit_code": 0, "duration_seconds": 0.01,
+                    "stderr": "", "raw_output": "Done"}
+
+        coordinator = Coordinator(self.root, self.config, EditingAdapter)
+        self.coordinators = getattr(self, "coordinators", []) + [coordinator]
+        task = coordinator.start("Build feature", {"claude": "implementation", "codex": "qa"})
+        self.assertEqual([agent for agent, _ in FakeAdapter.calls], ["claude", "codex"])
+        self.assertEqual(task["status"], "awaiting_human")
+        self.assertIn("Implementation agent diff for review", FakeAdapter.calls[1][1])
+        self.assertIn("feature.txt", FakeAdapter.calls[1][1])
+        self.assertIn("Read-only worktree was modified", coordinator.store.messages(task["id"])[-1]["content"])
+        self.assertEqual(task["artifacts"][0]["tests"][0]["exit_code"], 0)
+
+    def test_legacy_roles_and_custom_permission_flags(self):
+        coordinator = self.coordinator()
+        task = coordinator.create("Review legacy task", recipient="codex")
+        task["roles"] = {"codex": "architecture and code review", "claude": "independent QA"}
+        coordinator.store.save_task(task)
+        FakeAdapter.scripted = {"codex": [AgentResponse("codex", "Done", status="complete")]}
+        self.assertEqual(coordinator.resume(task["id"])["status"], "complete")
+        self.config["agents"]["claude"]["args"] = ["-p"]
+        with self.assertRaisesRegex(ValueError, "permission-mode"):
+            turn_settings("claude", {"roles": {"claude": "implementation"}}, self.config)
+
+    def test_activity_returns_to_idle_after_adapter_exception(self):
+        class RaisingAdapter(FakeAdapter):
+            def run(self, task, context, history, worktree):
+                raise RuntimeError("adapter failure")
+
+        events = []
+        coordinator = Coordinator(self.root, self.config, RaisingAdapter,
+                                  activity=lambda task_id, agent, stage: events.append(stage))
+        self.coordinators = getattr(self, "coordinators", []) + [coordinator]
+        task = coordinator.start("Failing task")
+        self.assertEqual(task["status"], "failed")
+        self.assertEqual(events[-1], "idle")
+
+    def test_invalid_role_assignment_is_rejected(self):
+        coordinator = self.coordinator()
+        with self.assertRaisesRegex(ValueError, "Only one agent"):
+            coordinator.create("Task", {"codex": "implementation", "claude": "implementation"})
+        with self.assertRaisesRegex(ValueError, "Choose an enabled"):
+            coordinator.create("Task", {"codex": "unknown"})
+        with self.assertRaisesRegex(ValueError, "Choose an enabled"):
+            coordinator.create("Task", {"unknown": "review"})
+        self.config["agents"]["gemini"]["enabled"] = False
+        with self.assertRaisesRegex(ValueError, "Choose an enabled"):
+            coordinator.create("Task", {"gemini": "qa"})
+
     def test_delegation_adds_turn_and_deduplicates(self):
         FakeAdapter.scripted = {
             "codex": [AgentResponse("codex", "Need check", "gemini", "Check boundary", status="working"),
@@ -135,6 +219,96 @@ class FlowTests(unittest.TestCase):
         self.assertEqual(task["status"], "awaiting_human")
         self.assertEqual([item["agent"] for item in task["queue"]], ["claude", "gemini"])
 
+    def test_budget_under_limit_runs_next_turn(self):
+        self.config["limits"]["budget"] = {"tokens": 100, "cost_usd": 1.0}
+        FakeAdapter.scripted = {
+            "codex": [AgentResponse("codex", "Done", status="complete", usage={"total_tokens": 20, "cost_usd": 0.1})],
+            "claude": [AgentResponse("claude", "Done", status="complete", usage={"total_tokens": 30, "cost_usd": 0.2})],
+            "gemini": [AgentResponse("gemini", "Done", status="complete", usage={"total_tokens": 10, "cost_usd": 0.1})],
+        }
+        coordinator = self.coordinator()
+        task = coordinator.start("Budgeted task")
+        self.assertEqual(task["status"], "complete")
+        remaining = coordinator.store.budget_summary(task)["remaining"]
+        self.assertEqual(remaining["tokens"], 40)
+        self.assertAlmostEqual(remaining["cost_usd"], 0.6)
+
+    def test_reached_cost_budget_pauses(self):
+        self.config["limits"]["budget"]["cost_usd"] = 0.25
+        FakeAdapter.scripted = {"codex": [AgentResponse("codex", "Done", status="complete", usage={"cost_usd": 0.25})]}
+        task = self.coordinator().start("Budgeted task")
+        self.assertEqual(task["status"], "awaiting_human")
+        self.assertIn("Cost budget reached", task["pause_reason"])
+
+    def test_reached_budget_on_final_turn_still_pauses(self):
+        self.config["limits"]["budget"]["tokens"] = 20
+        self.config["agents"]["claude"]["enabled"] = False
+        self.config["agents"]["gemini"]["enabled"] = False
+        FakeAdapter.scripted = {"codex": [AgentResponse("codex", "Done", status="complete", usage={"total_tokens": 20})]}
+        task = self.coordinator().start("Budgeted task")
+        self.assertEqual(task["status"], "awaiting_human")
+        self.assertEqual(task["queue"], [])
+        self.assertIn("Token budget reached", task["pause_reason"])
+
+    def test_reached_budget_pauses_before_next_turn_and_preserves_queue(self):
+        self.config["limits"]["budget"]["tokens"] = 20
+        FakeAdapter.scripted = {"codex": [AgentResponse("codex", "Done", status="complete", usage={"total_tokens": 20})]}
+        coordinator = self.coordinator()
+        task = coordinator.start("Budgeted task")
+        self.assertEqual(task["status"], "awaiting_human")
+        self.assertIn("Token budget reached", task["pause_reason"])
+        self.assertEqual(task["turn_count"], 1)
+        self.assertEqual([item["agent"] for item in task["queue"]], ["claude", "gemini"])
+        self.assertEqual([agent for agent, _ in FakeAdapter.calls], ["codex"])
+        self.assertEqual(coordinator.store.get_task(task["id"])["pause_reason"], task["pause_reason"])
+        output = io.StringIO()
+        with contextlib.redirect_stdout(output):
+            show_chat(coordinator, task["id"])
+        self.assertIn("Tokens budget: used 20, remaining 0 of 20", output.getvalue())
+        self.assertIn("Pause reason: Token budget reached", output.getvalue())
+
+    def test_missing_or_invalid_cost_pauses_before_next_turn(self):
+        self.config["limits"]["budget"]["cost_usd"] = 1.0
+        for cost_usage in ({}, {"cost_usd": "unknown"}, {"cost_usd": float("nan")}):
+            with self.subTest(cost_usage=cost_usage):
+                FakeAdapter.calls = []
+                FakeAdapter.scripted = {"codex": [AgentResponse("codex", "Done", status="complete", usage=cost_usage)]}
+                task = self.coordinator().start("Budgeted task")
+                self.assertEqual(task["status"], "awaiting_human")
+                self.assertIn("missing or invalid cost data", task["pause_reason"])
+                self.assertEqual([agent for agent, _ in FakeAdapter.calls], ["codex"])
+
+    def test_missing_cost_on_final_turn_still_requires_review(self):
+        self.config["limits"]["budget"]["cost_usd"] = 1.0
+        self.config["agents"]["claude"]["enabled"] = False
+        self.config["agents"]["gemini"]["enabled"] = False
+        FakeAdapter.scripted = {"codex": [AgentResponse("codex", "Done", status="complete")]}
+        task = self.coordinator().start("Budgeted task")
+        self.assertEqual(task["status"], "awaiting_human")
+        self.assertEqual(task["queue"], [])
+        self.assertIn("missing or invalid cost data", task["pause_reason"])
+
+    def test_disabled_budget_allows_missing_usage(self):
+        FakeAdapter.scripted = {agent: [AgentResponse(agent, "Done", status="complete")] for agent in ("codex", "claude", "gemini")}
+        task = self.coordinator().start("Unmetered task")
+        self.assertEqual(task["status"], "complete")
+        self.assertIsNone(task["pause_reason"])
+
+    def test_config_budget_validation(self):
+        path = self.root / ".ai-team" / "config.yaml"
+        for value in ("-1", "true", "1.5", "'many'"):
+            with self.subTest(value=value):
+                path.write_text(f"limits:\n  budget:\n    tokens: {value}\n", encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "limits.budget.tokens"):
+                    load(self.root)
+        path.write_text("limits:\n  budget:\n    cost_usd: 0.5\n", encoding="utf-8")
+        self.assertEqual(load(self.root)["limits"]["budget"], {"tokens": None, "cost_usd": 0.5})
+        for value in ("-0.1", "true", "'.5'", ".nan"):
+            with self.subTest(cost=value):
+                path.write_text(f"limits:\n  budget:\n    cost_usd: {value}\n", encoding="utf-8")
+                with self.assertRaisesRegex(ValueError, "limits.budget.cost_usd"):
+                    load(self.root)
+
     def test_new_message_replaces_pending_turns_for_its_recipients(self):
         coordinator = self.coordinator()
         task = coordinator.create("Original review")
@@ -151,6 +325,8 @@ class FlowTests(unittest.TestCase):
                          [(agent, "Team update") for agent in ("codex", "claude", "gemini")])
 
     def test_structured_and_mention_parsing(self):
+        priced = parse_response("claude", '{"result":"Done","usage":{"input_tokens":2,"output_tokens":3},"total_cost_usd":0.04}', "claude-json")
+        self.assertEqual(priced.usage["total_cost_usd"], 0.04)
         response = parse_response("claude", '{"message":"issue","delegate_to":"codex","delegated_task":"Fix it","status":"working"}', "claude-json")
         self.assertEqual((response.requested_agent, response.requested_task), ("codex", "Fix it"))
         response = parse_response("gemini", '{"response":"@claude Please review the diff"}', "gemini-json")
