@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import http.client
 import json
+import yaml
 import subprocess
 import tempfile
 import threading
@@ -86,6 +87,28 @@ class ServerTests(unittest.TestCase):
         self.assertEqual(json.loads(body)["usage"]["codex"], 24)
         self.assertEqual(json.loads(body)["quotas"]["codex"]["windows"][0]["remaining_percent"], 88)
 
+    def test_task_view_reports_budget_used_remaining_and_pause_reason(self):
+        config_path = self.root / ".ai-team" / "config.yaml"
+        config = yaml.safe_load(config_path.read_text(encoding="utf-8"))
+        config["limits"]["budget"] = {"tokens": 40, "cost_usd": 1.0}
+        config_path.write_text(yaml.safe_dump(config), encoding="utf-8")
+        store = Store(self.root / ".ai-team" / "state.sqlite3")
+        task = store.create_task("Budgeted task", config)
+        task["pause_reason"] = "Token budget reached"
+        store.save_task(task)
+        store.record_invocation({"id": "budget-test", "task_id": task["id"], "agent": "codex",
+                                 "started_at": "2026-01-01T00:00:00Z", "duration_seconds": 1.0,
+                                 "exit_code": 0, "prompt": "task", "raw_output": "", "stderr": "",
+                                 "response": json.dumps({"usage": {"total_tokens": 30, "cost_usd": 0.25}}),
+                                 "diff_before": "", "diff_after": ""})
+        store.close()
+        status, body = self.request("GET", f"/api/tasks/{task['id']}")
+        self.assertEqual(status, 200)
+        shown = json.loads(body)["task"]
+        self.assertEqual(shown["budget_summary"]["used"], {"tokens": 30, "cost_usd": 0.25})
+        self.assertEqual(shown["budget_summary"]["remaining"], {"tokens": 10, "cost_usd": 0.75})
+        self.assertEqual(shown["pause_reason"], "Token budget reached")
+
     def test_token_and_origin_guard_mutations(self):
         status, _ = self.request("GET", "/api/overview", token=None)
         self.assertEqual(status, 403)
@@ -108,6 +131,21 @@ class ServerTests(unittest.TestCase):
         store = Store(self.root / ".ai-team" / "state.sqlite3")
         self.assertEqual(store.get_task(task_id)["original_prompt"], "Review the docs")
         store.close()
+
+    def test_create_task_saves_selected_roles_and_activity_is_visible(self):
+        roles = {"codex": "q&a", "claude": "implementation", "gemini": "qa"}
+        with patch("ai_team.server.available_agents", return_value={"codex": True, "claude": True, "gemini": True}), \
+             patch.object(self.server.app, "_launch"):
+            status, body = self.request("POST", "/api/tasks", {"prompt": "Build it", "roles": roles})
+        self.assertEqual(status, 202)
+        task_id = json.loads(body)["task_id"]
+        self.server.app._activity(task_id, "claude", "thinking and responding")
+        shown = json.loads(self.request("GET", f"/api/tasks/{task_id}")[1])["task"]
+        self.assertEqual(shown["roles"], roles)
+        self.assertEqual(shown["queue"][0]["agent"], "claude")
+        self.assertEqual(shown["activity"], {"agent": "claude", "stage": "thinking and responding"})
+        overview = json.loads(self.request("GET", "/api/overview")[1])
+        self.assertEqual(overview["activity"][task_id]["agent"], "claude")
 
     def test_new_task_can_target_one_agent(self):
         launched = []

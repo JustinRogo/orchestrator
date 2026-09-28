@@ -3,6 +3,7 @@ from __future__ import annotations
 import copy
 import glob
 import json
+import math
 import os
 import shutil
 from pathlib import Path
@@ -37,6 +38,7 @@ DEFAULT_CONFIG: dict[str, Any] = {
     },
     "collaboration": {"max_turns": 12, "max_rounds": 3, "allow_agent_delegation": True,
                       "recent_messages": 8, "timeout_seconds": 600},
+    "limits": {"budget": {"tokens": None, "cost_usd": None}},
     "git": {"primary_implementation_agent": "codex", "auto_merge": False},
     "execution": {"tests": [], "allowed_environment": ["PATH", "PATHEXT", "SystemRoot", "WINDIR", "TEMP", "TMP", "HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "GEMINI_CLI_HOME", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "all_proxy", "no_proxy", "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "NODE_EXTRA_CA_CERTS"]},
 }
@@ -82,6 +84,10 @@ def load(root: Path) -> dict[str, Any]:
                 if agent not in config["agents"] or not isinstance(options, dict):
                     raise ValueError(f"Unknown or invalid agent: {agent}")
                 config["agents"][agent].update(options)
+        elif section == "limits":
+            if set(value) != {"budget"} or not isinstance(value["budget"], dict) or set(value["budget"]) - {"tokens", "cost_usd"}:
+                raise ValueError("limits must contain a budget with tokens and/or cost_usd")
+            config["limits"]["budget"].update(value["budget"])
         else:
             config[section].update(value)
     if config["git"]["auto_merge"]:
@@ -89,6 +95,14 @@ def load(root: Path) -> dict[str, Any]:
     for key in ("max_turns", "max_rounds", "recent_messages", "timeout_seconds"):
         if not isinstance(config["collaboration"][key], int) or config["collaboration"][key] < 1:
             raise ValueError(f"collaboration.{key} must be a positive integer")
+    budget = config["limits"].get("budget")
+    if not isinstance(budget, dict) or set(budget) != {"tokens", "cost_usd"}:
+        raise ValueError("limits.budget must contain tokens and cost_usd")
+    tokens, cost = budget["tokens"], budget["cost_usd"]
+    if tokens is not None and (type(tokens) is not int or tokens <= 0):
+        raise ValueError("limits.budget.tokens must be a positive integer or null")
+    if cost is not None and (type(cost) not in (int, float) or not math.isfinite(cost) or cost <= 0):
+        raise ValueError("limits.budget.cost_usd must be a positive finite number or null")
     for agent, options in config["agents"].items():
         if not isinstance(options["args"], list) or not all(isinstance(arg, str) for arg in options["args"]):
             raise ValueError(f"agents.{agent}.args must be a string list")

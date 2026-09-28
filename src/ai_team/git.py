@@ -59,7 +59,25 @@ class GitWorkspaceManager:
         self.verify(path)
         if not re.fullmatch(r"[a-f0-9]{40,64}|HEAD", base):
             raise ValueError("Invalid diff base")
-        return self._git("diff", base, "--", ".", cwd=path)
+        diff = self._git("diff", base, "--", ".", cwd=path)
+        untracked = self._git("ls-files", "--others", "--exclude-standard", "-z", cwd=path)
+        for name in untracked.split("\0")[:128]:
+            if not name:
+                continue
+            file = path / name
+            if not file.is_file() or not file.resolve().is_relative_to(path.resolve()):
+                continue
+            data = file.read_bytes()[:65536]
+            if b"\0" in data:
+                addition = f"\nUntracked binary file: {name}\n"
+            else:
+                content = data.decode("utf-8", errors="replace")
+                addition = f"\ndiff --git a/{name} b/{name}\nnew file\n--- /dev/null\n+++ b/{name}\n"
+                addition += "".join(f"+{line}\n" for line in content.splitlines())
+                if file.stat().st_size > len(data):
+                    addition += "+[file truncated]\n"
+            diff += addition
+        return diff
 
     def changed_files(self, path: Path, base: str = "HEAD") -> list[str]:
         self.verify(path)

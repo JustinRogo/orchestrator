@@ -7,6 +7,9 @@ from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
+from .budget import summary
+from .roles import implementation_agent, validate_roles
+
 
 def now() -> str:
     return datetime.now(timezone.utc).isoformat()
@@ -23,7 +26,9 @@ class Store:
                 status TEXT NOT NULL, created_at TEXT NOT NULL, current_round INTEGER NOT NULL,
                 max_rounds INTEGER NOT NULL, turn_count INTEGER NOT NULL,
                 roles TEXT NOT NULL, queue TEXT NOT NULL, seen_delegations TEXT NOT NULL,
-                git_state TEXT NOT NULL, artifacts TEXT NOT NULL);
+                git_state TEXT NOT NULL, artifacts TEXT NOT NULL,
+                budget TEXT NOT NULL DEFAULT '{"tokens": null, "cost_usd": null}',
+                pause_reason TEXT);
             CREATE TABLE IF NOT EXISTS messages (
                 id TEXT PRIMARY KEY, task_id TEXT NOT NULL REFERENCES tasks(id),
                 sender TEXT NOT NULL, recipient TEXT, content TEXT NOT NULL,
@@ -37,6 +42,11 @@ class Store:
             CREATE TABLE IF NOT EXISTS agent_quota (
                 agent TEXT PRIMARY KEY, snapshot TEXT NOT NULL);
         """)
+        columns = {row["name"] for row in self.db.execute("PRAGMA table_info(tasks)")}
+        if "budget" not in columns:
+            self.db.execute("ALTER TABLE tasks ADD COLUMN budget TEXT NOT NULL DEFAULT '{\"tokens\": null, \"cost_usd\": null}'")
+        if "pause_reason" not in columns:
+            self.db.execute("ALTER TABLE tasks ADD COLUMN pause_reason TEXT")
         self.db.commit()
 
     def close(self) -> None:
@@ -52,11 +62,17 @@ class Store:
             if recipient not in agents:
                 raise ValueError("Choose an enabled agent or the whole team")
             agents = [recipient]
+        roles = validate_roles(roles, config["agents"])
+        primary = implementation_agent({"roles": roles}, config)
+        if primary in agents:
+            agents.remove(primary)
+            agents.insert(0, primary)
         task = {"id": task_id, "title": prompt.strip().splitlines()[0][:100], "original_prompt": prompt,
                 "status": "running", "created_at": now(), "current_round": 1,
                 "max_rounds": config["collaboration"]["max_rounds"], "turn_count": 0,
-                "roles": roles or {}, "queue": [{"agent": name, "task": prompt, "source": "human", "round": 1} for name in agents],
-                "seen_delegations": [], "git_state": {}, "artifacts": []}
+                "roles": roles, "queue": [{"agent": name, "task": prompt, "source": "human", "round": 1} for name in agents],
+                "seen_delegations": [], "git_state": {}, "artifacts": [],
+                "budget": dict(config["limits"]["budget"]), "pause_reason": None}
         self.save_task(task)
         self.add_message(task_id, "human", recipient, prompt)
         return task
@@ -91,13 +107,16 @@ class Store:
 
     def save_task(self, task: dict[str, Any]) -> None:
         row = dict(task)
-        for key in ("roles", "queue", "seen_delegations", "git_state", "artifacts"):
+        for key in ("roles", "queue", "seen_delegations", "git_state", "artifacts", "budget"):
             row[key] = json.dumps(row[key])
-        self.db.execute("""INSERT INTO tasks VALUES (:id,:title,:original_prompt,:status,:created_at,
-                         :current_round,:max_rounds,:turn_count,:roles,:queue,:seen_delegations,:git_state,:artifacts)
+        self.db.execute("""INSERT INTO tasks (id,title,original_prompt,status,created_at,current_round,max_rounds,
+                         turn_count,roles,queue,seen_delegations,git_state,artifacts,budget,pause_reason)
+                         VALUES (:id,:title,:original_prompt,:status,:created_at,
+                         :current_round,:max_rounds,:turn_count,:roles,:queue,:seen_delegations,:git_state,:artifacts,:budget,:pause_reason)
                          ON CONFLICT(id) DO UPDATE SET status=excluded.status,current_round=excluded.current_round,
                          max_rounds=excluded.max_rounds,turn_count=excluded.turn_count,roles=excluded.roles,queue=excluded.queue,
-                         seen_delegations=excluded.seen_delegations,git_state=excluded.git_state,artifacts=excluded.artifacts""", row)
+                         seen_delegations=excluded.seen_delegations,git_state=excluded.git_state,artifacts=excluded.artifacts,
+                         pause_reason=excluded.pause_reason""", row)
         self.db.commit()
 
     def get_task(self, task_id: str) -> dict[str, Any]:
@@ -105,9 +124,18 @@ class Store:
         if row is None:
             raise ValueError(f"Unknown task: {task_id}")
         task = dict(row)
-        for key in ("roles", "queue", "seen_delegations", "git_state", "artifacts"):
+        for key in ("roles", "queue", "seen_delegations", "git_state", "artifacts", "budget"):
             task[key] = json.loads(task[key])
         return task
+
+    def budget_summary(self, task: dict[str, Any]) -> dict[str, Any]:
+        usages = []
+        for row in self.db.execute("SELECT response FROM invocations WHERE task_id=? ORDER BY rowid", (task["id"],)):
+            try:
+                usages.append(json.loads(row["response"]).get("usage"))
+            except (ValueError, TypeError, AttributeError):
+                usages.append(None)
+        return summary(task["budget"], usages)
 
     def list_tasks(self) -> list[dict[str, Any]]:
         return [self.get_task(row["id"]) for row in self.db.execute("SELECT id FROM tasks ORDER BY created_at DESC")]

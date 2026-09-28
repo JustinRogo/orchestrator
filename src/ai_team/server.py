@@ -20,6 +20,7 @@ from urllib.parse import urlsplit
 from .config import available_agents, load, team_dir
 from .coordinator import Coordinator
 from .quota import collect as collect_quota
+from .roles import ROLE_LABELS, validate_roles
 
 
 DEFAULT_PORT = 8765
@@ -33,11 +34,12 @@ class WebApp:
         self.root = root.resolve()
         self.token = token or secrets.token_urlsafe(32)
         self.active: set[str] = set()
+        self.activity: dict[str, dict[str, str]] = {}
         self.lock = threading.Lock()
 
     @contextmanager
     def coordinator(self) -> Iterator[Coordinator]:
-        coordinator = Coordinator(self.root, load(self.root))
+        coordinator = Coordinator(self.root, load(self.root), activity=self._activity)
         try:
             yield coordinator
         finally:
@@ -51,9 +53,13 @@ class WebApp:
             quotas = coordinator.store.agent_quotas()
         with self.lock:
             active = set(self.active)
+            activity = dict(self.activity)
         return {
             "project": {"name": self.root.name, "path": str(self.root)},
             "agents": available_agents(config),
+            "default_roles": {name: settings["role"] for name, settings in config["agents"].items() if settings["enabled"]},
+            "role_options": ROLE_LABELS,
+            "activity": activity,
             "usage": usage,
             "quotas": quotas,
             "tasks": [{"id": task["id"], "title": task["title"], "status": task["status"],
@@ -76,6 +82,7 @@ class WebApp:
     def task(self, task_id: str) -> dict[str, Any]:
         with self.coordinator() as coordinator:
             task = coordinator.store.get_task(task_id)
+            task["budget_summary"] = coordinator.store.budget_summary(task)
             messages = coordinator.store.messages(task_id)
             invocation = coordinator.store.db.execute(
                 "SELECT exit_code FROM invocations WHERE task_id=? ORDER BY rowid DESC LIMIT 1", (task_id,)
@@ -86,6 +93,7 @@ class WebApp:
                                       or (invocation is not None and invocation["exit_code"] != 0)))
         with self.lock:
             task["active"] = task_id in self.active
+            task["activity"] = self.activity.get(task_id)
         return {"task": task, "messages": messages}
 
     def diff(self, task_id: str) -> dict[str, Any]:
@@ -104,12 +112,8 @@ class WebApp:
     def create(self, prompt: str, roles: dict[str, str] | None = None, recipient: str = "all") -> str:
         if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 20_000:
             raise ValueError("Enter a task of at most 20,000 characters")
-        if roles is not None and (not isinstance(roles, dict) or any(
-            name not in {"codex", "claude", "gemini"} or not isinstance(role, str) or len(role) > 500
-            for name, role in roles.items()
-        )):
-            raise ValueError("Invalid agent roles")
         config = load(self.root)
+        roles = validate_roles(roles, config["agents"])
         agents = available_agents(config)
         missing = [name for name, found in agents.items() if not found and recipient in {"all", name}]
         if missing:
@@ -123,6 +127,8 @@ class WebApp:
         if action == "stop":
             with self.coordinator() as coordinator:
                 coordinator.stop(task_id)
+            with self.lock:
+                self.activity.pop(task_id, None)
             return
         with self.coordinator() as coordinator:
             task = coordinator.store.get_task(task_id)
@@ -160,9 +166,17 @@ class WebApp:
             if task_id in self.active:
                 raise ValueError("This task already has an active run")
             self.active.add(task_id)
+            self.activity[task_id] = {"agent": "", "stage": "starting"}
         thread = threading.Thread(target=self._run, args=(task_id, action), daemon=True,
                                   name=f"ai-team-{task_id}")
         thread.start()
+
+    def _activity(self, task_id: str, agent: str, stage: str) -> None:
+        with self.lock:
+            if stage == "idle":
+                self.activity.pop(task_id, None)
+            else:
+                self.activity[task_id] = {"agent": agent, "stage": stage}
 
     def _run(self, task_id: str, action: str) -> None:
         try:
@@ -182,6 +196,7 @@ class WebApp:
         finally:
             with self.lock:
                 self.active.discard(task_id)
+                self.activity.pop(task_id, None)
 
 
 class LocalServer(ThreadingHTTPServer):

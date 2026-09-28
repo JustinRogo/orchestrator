@@ -6,19 +6,23 @@ from pathlib import Path
 from typing import Any, Callable
 
 from .adapters import ADAPTERS, AgentResponse
+from .budget import pause_reason
 from .config import team_dir
 from .git import CommandPolicy, GitWorkspaceManager
 from .quota import collect as collect_quota
+from .roles import implementation_agent, turn_settings
 from .store import Store, now
 
 
 class Coordinator:
-    def __init__(self, root: Path, config: dict[str, Any], adapter_factory: Callable[..., Any] | None = None):
+    def __init__(self, root: Path, config: dict[str, Any], adapter_factory: Callable[..., Any] | None = None,
+                 activity: Callable[[str, str, str], None] | None = None):
         self.root = root.resolve()
         self.config = config
         self.store = Store(team_dir(self.root) / "state.sqlite3")
         self.git = GitWorkspaceManager(self.root)
         self.adapter_factory = adapter_factory
+        self.activity = activity
         self.command_policy = CommandPolicy(config["execution"]["tests"])
 
     def _adapter(self, agent: str):
@@ -35,7 +39,7 @@ class Coordinator:
                 parts.append(f"{name}:\n{path.read_text(encoding='utf-8')[:8000]}")
         messages = self.store.messages(task["id"])[-self.config["collaboration"]["recent_messages"]:]
         parts.append("Recent conversation:\n" + "\n".join(f"[{item['sender']} -> {item['recipient']}] {item['content']}" for item in messages))
-        if agent == "gemini" and self.config["agents"][agent]["read_only"]:
+        if turn_settings(agent, task, self.config)["read_only"]:
             tracked = self.git.tracked_files(worktree)
             parts.append("Tracked files available for read-only review (paths relative to this worktree):\n"
                          + "\n".join(tracked[:100]))
@@ -43,8 +47,8 @@ class Coordinator:
         diff = self.git.diff(worktree, base)
         if diff:
             parts.append("Current worktree diff (truncated):\n" + diff[:16000])
-        primary = self.config["git"]["primary_implementation_agent"]
-        if agent != primary:
+        primary = implementation_agent(task, self.config)
+        if primary and agent != primary:
             primary_path = self.git.path(task["id"], primary)
             if primary_path.exists():
                 primary_diff = self.git.diff(primary_path, base)
@@ -68,6 +72,13 @@ class Coordinator:
         return task
 
     def resume(self, task_id: str) -> dict[str, Any]:
+        try:
+            return self._resume(task_id)
+        finally:
+            if self.activity:
+                self.activity(task_id, "", "idle")
+
+    def _resume(self, task_id: str) -> dict[str, Any]:
         task = self.store.get_task(task_id)
         if task["status"] in {"stopped", "complete", "awaiting_human", "failed"}:
             return task
@@ -76,6 +87,11 @@ class Coordinator:
             if self.store.get_task(task_id)["status"] == "stopped":
                 task["status"] = "stopped"
                 break
+            reason = pause_reason(self.store.budget_summary(task))
+            if reason:
+                task["status"] = "awaiting_human"
+                task["pause_reason"] = reason
+                break
             item = task["queue"].pop(0)
             agent = item["agent"]
             if item["round"] > task["max_rounds"]:
@@ -83,16 +99,19 @@ class Coordinator:
                 task["status"] = "awaiting_human"
                 break
             task["current_round"] = item["round"]
+            if self.activity:
+                self.activity(task_id, agent, "preparing")
             base = task["git_state"].get("base", "HEAD")
             worktree = self.git.ensure(task_id, agent, base)
             before = self.git.diff(worktree, base)
             old_status = self.git.status(worktree)
-            settings = dict(self.config["agents"][agent])
-            settings["role"] = task["roles"].get(agent, settings["role"])
+            settings = turn_settings(agent, task, self.config)
             context = self._context(task, agent, worktree)
             adapter = self._adapter(agent)
             adapter.settings = settings
             try:
+                if self.activity:
+                    self.activity(task_id, agent, "thinking and responding")
                 response, detail = adapter.run(item["task"], context, self.store.messages(task_id), worktree)
             except Exception as error:
                 response = AgentResponse(agent, f"Invocation failed: {error}", status="blocked")
@@ -103,7 +122,9 @@ class Coordinator:
             if settings["read_only"] and (old_status != self.git.status(worktree) or before != after):
                 response.status = "blocked"
                 response.message += "\nRead-only worktree was modified; human inspection required."
-            if agent == self.config["git"]["primary_implementation_agent"] and self.config["execution"]["tests"]:
+            if self.activity:
+                self.activity(task_id, agent, "finishing")
+            if agent == implementation_agent(task, self.config) and self.config["execution"]["tests"]:
                 try:
                     response.tests_run = self.command_policy.run_tests(worktree)
                 except Exception as error:
@@ -126,6 +147,12 @@ class Coordinator:
                 task["status"] = "awaiting_human"
                 break
             self._delegate(task, response, item["round"])
+            budget_state = self.store.budget_summary(task)
+            reason = pause_reason(budget_state)
+            if reason:
+                task["status"] = "awaiting_human"
+                task["pause_reason"] = reason
+                break
             self.store.save_task(task)
         if task["status"] == "running":
             if task["queue"]:
@@ -206,6 +233,7 @@ class Coordinator:
                           for name in recipients]
                          + [item for item in task["queue"] if item["agent"] not in recipients])
         task["status"] = "running"
+        task["pause_reason"] = None
         self.store.add_message(task_id, "human", recipient, message.strip())
         self.store.save_task(task)
         return task

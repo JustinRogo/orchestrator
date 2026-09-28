@@ -83,6 +83,8 @@ def parse_response(agent: str, raw: str, output_format: str) -> AgentResponse:
         payload = _structured(raw)
         if isinstance(payload, dict):
             usage = payload.get("usage") or payload.get("stats") or {}
+            if isinstance(usage, dict) and "total_cost_usd" in payload:
+                usage = {**usage, "total_cost_usd": payload["total_cost_usd"]}
             if not ("delegate_to" in payload or "requested_agent" in payload or "status" in payload):
                 payload = payload.get("result") or payload.get("response") or payload.get("message") or payload
     if isinstance(payload, dict):
