@@ -63,13 +63,10 @@ class Coordinator:
         return self.resume(task["id"])
 
     def create(self, prompt: str, roles: dict[str, str] | None = None,
-               recipient: str = "all") -> dict[str, Any]:
+               recipient: str = "all", *, handoff: dict | None = None) -> dict[str, Any]:
         if not prompt.strip():
             raise ValueError("Task prompt must not be empty")
-        task = self.store.create_task(prompt, self.config, roles, recipient)
-        task["git_state"]["base"] = self.git.head()
-        self.store.save_task(task)
-        return task
+        return self.store.create_task(prompt, self.config, roles, recipient, base=self.git.head(), handoff=handoff)
 
     def resume(self, task_id: str) -> dict[str, Any]:
         try:

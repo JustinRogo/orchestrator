@@ -9,14 +9,18 @@ import secrets
 import socket
 import threading
 import webbrowser
-from contextlib import contextmanager
+from contextlib import closing, contextmanager
+from html import escape
 from http import HTTPStatus
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from importlib.resources import files
 from pathlib import Path
 from typing import Any, Iterator
-from urllib.parse import urlsplit
+from urllib.parse import parse_qs, urlsplit
 
+from .chat import ChatBusy, ChatConflict, ChatService, _request_id, _text
+from .chat_output import BRIEF_FIELDS, coding_prompt, draft, export
+from .chat_store import ChatStore
 from .config import available_agents, load, team_dir
 from .coordinator import Coordinator
 from .quota import collect as collect_quota
@@ -26,12 +30,28 @@ from .roles import ROLE_LABELS, validate_roles
 DEFAULT_PORT = 8765
 PORT_ATTEMPTS = 10
 TASK_PATH = re.compile(r"^/api/tasks/([a-f0-9]{12})(?:/(diff|resume|retry|stop|guide|message))?$")
+SESSION_PATH = re.compile(r"^/api/v1/sessions/([a-f0-9]{32})(/messages)?$")
+SESSION_LIVE_PATH = re.compile(r"^/api/v1/sessions/([a-f0-9]{32})/(events|cancel)$")
+SESSION_OUTPUT_PATH = re.compile(r"^/api/v1/sessions/([a-f0-9]{32})/(branch|export|handoff)$")
+LINKED_OUTPUT_PATH = re.compile(r"^/api/v1/sessions/([a-f0-9]{32})/artifacts/([a-f0-9]{12})$")
+RUN_ACTION_PATH = re.compile(r"^/api/v1/sessions/([a-f0-9]{32})/runs/([a-f0-9]{32})/(pause|stop|cancel|next|retry|synthesize|choose|expand|promote)$")
+MODELS_PATH = "/api/v1/models"
+SESSIONS_PATH = "/api/v1/sessions"
+TEAMS_PATH = "/api/v1/teams"
+PREVIEW_PATH = "/chat/preview"
+PREVIEW_ASSETS = f"{PREVIEW_PATH}/assets/"
+ASSET_NAME = re.compile(r"[A-Za-z0-9_-]+\.(js|css)")
+DEFAULT_MODE_MARKER = "__AI_TEAM_DEFAULT_MODE__"
+DEFAULT_PAGES = {"/", "/chat", "/chat/"}
+CLASSIC_PAGES = {"/classic", "/classic/chat"}
+PAGE_POLICY = "default-src 'none'; connect-src 'self'; base-uri 'none'; form-action 'none'"
 MAX_BODY_BYTES = 32_768
 
 
 class WebApp:
     def __init__(self, root: Path, token: str | None = None):
         self.root = root.resolve()
+        self.chat = ChatService(self.root)
         self.token = token or secrets.token_urlsafe(32)
         self.active: set[str] = set()
         self.activity: dict[str, dict[str, str]] = {}
@@ -94,7 +114,9 @@ class WebApp:
         with self.lock:
             task["active"] = task_id in self.active
             task["activity"] = self.activity.get(task_id)
-        return {"task": task, "messages": messages}
+        with closing(ChatStore(self.chat.path)) as chat:
+            source = chat.handoff_source(task_id)
+        return {"task": task, "messages": messages, "source": source}
 
     def diff(self, task_id: str) -> dict[str, Any]:
         with self.coordinator() as coordinator:
@@ -109,7 +131,8 @@ class WebApp:
                                       "diff": diff[:200_000], "truncated": len(diff) > 200_000}
         return {"changes": changes}
 
-    def create(self, prompt: str, roles: dict[str, str] | None = None, recipient: str = "all") -> str:
+    def create(self, prompt: str, roles: dict[str, str] | None = None, recipient: str = "all",
+               *, handoff: dict | None = None) -> str:
         if not isinstance(prompt, str) or not prompt.strip() or len(prompt) > 20_000:
             raise ValueError("Enter a task of at most 20,000 characters")
         config = load(self.root)
@@ -119,9 +142,50 @@ class WebApp:
         if missing:
             raise ValueError(f"Required CLIs missing: {', '.join(missing)}. Set their command paths in .ai-team/config.yaml.")
         with self.coordinator() as coordinator:
-            task = coordinator.create(prompt, roles, recipient)
-        self._launch(task["id"], "resume")
+            task = coordinator.create(prompt, roles, recipient, handoff=handoff)
+        if not task.get("replayed"):
+            self._launch(task["id"], "resume")
         return task["id"]
+
+    def handoff_draft(self, session_id: str) -> dict:
+        view = self.chat.get(session_id)
+        config = load(self.root)
+        agents = available_agents(config)
+        ready = [name for name, available in agents.items() if available]
+        primary = config["git"]["primary_implementation_agent"]
+        roles = {}
+        for name in agents:
+            role = config["agents"][name]["role"].casefold()
+            roles[name] = "implementation" if name == primary and not config["agents"][name]["read_only"] else (
+                "qa" if "qa" in role else "q&a" if role == "q&a" else "review")
+        return {"brief": draft(view), "repository": str(self.root), "agents": agents, "roles": roles,
+                "role_options": ROLE_LABELS, "recipient": "all" if len(ready) == len(agents) else next(iter(ready), "all")}
+
+    def handoff(self, session_id: str, body: dict) -> str:
+        if body.get("confirmed") is not True:
+            raise ChatConflict("Review the handoff and confirm starting the Code Mode task.")
+        if body.get("repository") != str(self.root):
+            raise ChatConflict("Review the repository shown by the current Code Mode dashboard.")
+        request_id = _request_id(body)
+        fields = body.get("brief")
+        if not isinstance(fields, dict):
+            raise ValueError("Review and complete the coding brief.")
+        brief = {key: _text(fields.get(key, ""), label, 4500, blank=key != "objective")
+                 for key, label in BRIEF_FIELDS.items()}
+        prompt = coding_prompt(brief)
+        if len(prompt.encode("utf-8")) > 20_000:
+            raise ValueError("Shorten the coding brief to 20,000 UTF-8 bytes.")
+        roles = validate_roles(body.get("roles"), load(self.root)["agents"])
+        recipient = body.get("recipient", "all")
+        if not isinstance(recipient, str):
+            raise ValueError("Choose one agent or the whole team.")
+        with closing(ChatStore(self.chat.path)) as store:
+            store.session(session_id)
+        payload = {"repository": str(self.root), "brief": brief, "roles": roles, "recipient": recipient}
+        handoff = {"session_id": session_id, "request_id": request_id, "payload": json.dumps(payload, sort_keys=True)}
+        task_id = self.create(prompt, roles, recipient, handoff=handoff)
+        self.chat.live.changed(session_id)
+        return task_id
 
     def action(self, task_id: str, action: str) -> None:
         if action == "stop":
@@ -209,60 +273,178 @@ class LocalServer(ThreadingHTTPServer):
             self.socket.setsockopt(socket.SOL_SOCKET, socket.SO_EXCLUSIVEADDRUSE, 1)
         super().server_bind()
 
+    def server_close(self) -> None:
+        try:
+            if hasattr(self, "app"):
+                self.app.chat.close()
+        finally:
+            super().server_close()
 
-def make_server(root: Path, port: int = DEFAULT_PORT, token: str | None = None) -> ThreadingHTTPServer:
+
+def make_server(root: Path, port: int = DEFAULT_PORT, token: str | None = None, *,
+                chat_only: bool = False) -> LocalServer:
     app = WebApp(root, token)
+    web = files("ai_team").joinpath("web")
+    preview = web.joinpath("modern")
+    preview_index = preview.joinpath("index.html")
 
     class Handler(BaseHTTPRequestHandler):
         def log_message(self, format: str, *args: Any) -> None:
             return
 
-        def _authorized(self) -> bool:
-            host = self.headers.get("Host", "")
+        def _local_host(self) -> bool:
             expected = {f"127.0.0.1:{self.server.server_port}", f"localhost:{self.server.server_port}"}
-            return host in expected and self.headers.get("X-AI-Team-Token") == app.token
+            return self.headers.get("Host", "") in expected
+
+        def _authorized(self) -> bool:
+            return self._local_host() and self.headers.get("X-AI-Team-Token") == app.token
+
+        def _local_origin(self) -> bool:
+            origin = self.headers.get("Origin")
+            return not origin or origin in {f"http://127.0.0.1:{self.server.server_port}",
+                                            f"http://localhost:{self.server.server_port}"}
 
         def _json(self, status: int, body: dict[str, Any]) -> None:
             encoded = json.dumps(body, ensure_ascii=False).encode("utf-8")
-            self.send_response(status)
-            self.send_header("Content-Type", "application/json; charset=utf-8")
-            self.send_header("Cache-Control", "no-store")
-            self.send_header("X-Content-Type-Options", "nosniff")
-            self.send_header("Content-Length", str(len(encoded)))
-            self.end_headers()
-            self.wfile.write(encoded)
+            self._web_content(encoded, "application/json; charset=utf-8", status=status)
 
         def _error(self, status: int, message: str) -> None:
             self._json(status, {"error": message})
 
-        def do_GET(self) -> None:
-            path = urlsplit(self.path).path
-            if path in {"/", "/api/ping"}:
-                host = self.headers.get("Host", "")
-                if host not in {f"127.0.0.1:{self.server.server_port}", f"localhost:{self.server.server_port}"}:
-                    self._error(HTTPStatus.FORBIDDEN, "Invalid host")
-                    return
-            if path == "/api/ping":
-                # Unauthenticated so a second launch can find this dashboard instead of starting another.
-                self._json(HTTPStatus.OK, {"app": "ai-team", "root": str(app.root)})
-                return
-            if path == "/":
-                page = files("ai_team").joinpath("web/index.html").read_text(encoding="utf-8")
-                encoded = page.replace("__AI_TEAM_TOKEN__", app.token).encode("utf-8")
-                self.send_response(HTTPStatus.OK)
-                self.send_header("Content-Type", "text/html; charset=utf-8")
-                self.send_header("Content-Security-Policy", "default-src 'none'; style-src 'unsafe-inline'; script-src 'unsafe-inline'; connect-src 'self'; base-uri 'none'; form-action 'none'")
-                self.send_header("Referrer-Policy", "no-referrer")
-                self.send_header("Cache-Control", "no-store")
-                self.send_header("X-Content-Type-Options", "nosniff")
-                self.send_header("Content-Length", str(len(encoded)))
+        def _web_content(self, encoded: bytes, media_type: str, *, policy: str | None = None,
+                         cache: str = "no-store", status: int = HTTPStatus.OK, filename: str | None = None) -> None:
+            self.send_response(status)
+            self.send_header("Content-Type", media_type)
+            if policy:
+                self.send_header("Content-Security-Policy", policy)
+            self.send_header("Referrer-Policy", "no-referrer")
+            self.send_header("Cache-Control", cache)
+            self.send_header("X-Content-Type-Options", "nosniff")
+            if filename:
+                self.send_header("Content-Disposition", f'attachment; filename="{filename}"')
+            self.send_header("Content-Length", str(len(encoded)))
+            try:
                 self.end_headers()
                 self.wfile.write(encoded)
+            except (ConnectionError, TimeoutError):
+                self.close_connection = True
+
+        def _frontend_asset(self, path: str) -> None:
+            name = path.removeprefix(PREVIEW_ASSETS)
+            match = ASSET_NAME.fullmatch(name)
+            if match and preview_index.is_file():
+                asset = preview.joinpath("assets", name)
+                if asset.is_file():
+                    media_type = {"js": "text/javascript", "css": "text/css"}[match[1]]
+                    self._web_content(asset.read_bytes(), f"{media_type}; charset=utf-8",
+                                      cache="private, max-age=31536000, immutable")
+                    return
+            self._error(HTTPStatus.NOT_FOUND, "Dashboard asset not found")
+
+        def _frontend_page(self, template: str, mode: str) -> None:
+            page = (template.replace("__AI_TEAM_CODE_MODE__", "disabled" if chat_only else "enabled")
+                    .replace(DEFAULT_MODE_MARKER, mode)
+                    .replace("__AI_TEAM_TOKEN__", escape(app.token, quote=True)))
+            self._web_content(page.encode("utf-8"), "text/html; charset=utf-8",
+                              policy=f"{PAGE_POLICY}; style-src 'self'; script-src 'self'; frame-ancestors 'none'")
+
+        def do_GET(self) -> None:
+            url = urlsplit(self.path)
+            path = url.path
+            is_preview = path in {PREVIEW_PATH, f"{PREVIEW_PATH}/"}
+            is_asset = path.startswith(PREVIEW_ASSETS)
+            if (is_preview or is_asset or path in DEFAULT_PAGES | CLASSIC_PAGES | {"/api/ping"}) and not self._local_host():
+                self._error(HTTPStatus.FORBIDDEN, "Invalid host")
+                return
+            if is_asset:
+                self._frontend_asset(path)
+                return
+            if path == "/api/ping":
+                # Unauthenticated so a second launch can find this dashboard instead of starting another.
+                self._json(HTTPStatus.OK, {"app": "ai-team-chat" if chat_only else "ai-team", "root": str(app.root)})
+                return
+            if is_preview or path in DEFAULT_PAGES:
+                try:
+                    template = preview_index.read_text(encoding="utf-8")
+                except FileNotFoundError:
+                    template = ""
+                if template and (is_preview or DEFAULT_MODE_MARKER in template):
+                    self._frontend_page(template, "code" if path == "/" and not chat_only else "chat")
+                    return
+                if is_preview:
+                    self._error(HTTPStatus.NOT_FOUND, "Build the dashboard with npm --prefix frontend run build.")
+                    return
+            if path in DEFAULT_PAGES | CLASSIC_PAGES:
+                page_name = "chat.html" if chat_only or path in {"/chat", "/chat/", "/classic/chat"} else "index.html"
+                page = web.joinpath(page_name).read_text(encoding="utf-8")
+                classic = path in CLASSIC_PAGES
+                encoded = (page.replace("__AI_TEAM_TOKEN__", app.token)
+                           .replace("__CODE_LINK_HIDDEN__", "hidden" if chat_only else "")
+                           .replace("__CODE_MODE_URL__", "/classic" if classic else "/")
+                           .replace("__CHAT_MODE_URL__", "/classic/chat" if classic else "/chat")
+                           .replace("__MODERN_CHAT_LINK_HIDDEN__", "" if preview_index.is_file() else "hidden")
+                           .encode("utf-8"))
+                self._web_content(encoded, "text/html; charset=utf-8",
+                                  policy=f"{PAGE_POLICY}; style-src 'unsafe-inline'; script-src 'unsafe-inline'")
                 return
             if not self._authorized():
                 self._error(HTTPStatus.FORBIDDEN, "Unauthorized")
                 return
             try:
+                live = SESSION_LIVE_PATH.fullmatch(path)
+                if live and live[2] == "events":
+                    if not self._local_origin():
+                        self._error(HTTPStatus.FORBIDDEN, "Invalid origin")
+                        return
+                    after = parse_qs(url.query, keep_blank_values=True).get("after", [])
+                    if after and (len(after) != 1 or not re.fullmatch(r"[0-9]{1,16}", after[0])):
+                        self._error(HTTPStatus.BAD_REQUEST, "Invalid event cursor")
+                        return
+                    result = app.chat.events(live[1], int(after[0]) if after else None)
+                    self._json(HTTPStatus.OK, result)
+                    return
+                if path == MODELS_PATH:
+                    self._json(HTTPStatus.OK, app.chat.models())
+                    return
+                if path == SESSIONS_PATH:
+                    self._json(HTTPStatus.OK, app.chat.list())
+                    return
+                if path == TEAMS_PATH:
+                    self._json(HTTPStatus.OK, app.chat.teams())
+                    return
+                output = SESSION_OUTPUT_PATH.fullmatch(path)
+                linked = LINKED_OUTPUT_PATH.fullmatch(path)
+                if (output or linked) and not self._local_origin():
+                    self._error(HTTPStatus.FORBIDDEN, "Invalid origin")
+                    return
+                if output and output[2] == "export":
+                    query = parse_qs(url.query, keep_blank_values=True)
+                    format = query.get("format", ["markdown"])
+                    diagnostics = query.get("diagnostics", ["0"])
+                    if format not in (["markdown"], ["json"]) or diagnostics not in (["0"], ["1"]):
+                        self._error(HTTPStatus.BAD_REQUEST, "Choose Markdown or JSON and whether to include diagnostics")
+                        return
+                    extension, media = ("json", "application/json") if format[0] == "json" else ("md", "text/markdown")
+                    result = export(app.chat.get(output[1]), format[0], diagnostics[0] == "1")
+                    self._web_content(result.encode("utf-8"), media + "; charset=utf-8",
+                                      filename=f"conversation-{output[1]}.{extension}")
+                    return
+                if linked:
+                    with closing(ChatStore(app.chat.path)) as store, store.db:
+                        store.db.execute("BEGIN")
+                        result = store.linked_outputs(*linked.groups())
+                    self._json(HTTPStatus.OK, result)
+                    return
+                if output and output[2] == "handoff" and not chat_only:
+                    self._json(HTTPStatus.OK, app.handoff_draft(output[1]))
+                    return
+                session = SESSION_PATH.fullmatch(path)
+                if session and not session[2]:
+                    self._json(HTTPStatus.OK, app.chat.get(session[1]))
+                    return
+                if chat_only:
+                    self._error(HTTPStatus.NOT_FOUND, "Not found")
+                    return
                 if path == "/api/overview":
                     self._json(HTTPStatus.OK, app.overview())
                     return
@@ -273,6 +455,10 @@ def make_server(root: Path, port: int = DEFAULT_PORT, token: str | None = None) 
                     self._json(HTTPStatus.OK, app.diff(match.group(1)))
                 else:
                     self._error(HTTPStatus.NOT_FOUND, "Not found")
+            except KeyError:
+                self._error(HTTPStatus.NOT_FOUND, "Conversation not found")
+            except ChatBusy as error:
+                self._error(HTTPStatus.SERVICE_UNAVAILABLE, str(error))
             except ValueError as error:
                 self._error(HTTPStatus.NOT_FOUND, str(error))
             except Exception:
@@ -282,9 +468,7 @@ def make_server(root: Path, port: int = DEFAULT_PORT, token: str | None = None) 
             if not self._authorized():
                 self._error(HTTPStatus.FORBIDDEN, "Unauthorized")
                 return
-            origin = self.headers.get("Origin")
-            if origin and origin not in {f"http://127.0.0.1:{self.server.server_port}",
-                                         f"http://localhost:{self.server.server_port}"}:
+            if not self._local_origin():
                 self._error(HTTPStatus.FORBIDDEN, "Invalid origin")
                 return
             if self.headers.get("Content-Type", "").split(";")[0] != "application/json":
@@ -302,6 +486,34 @@ def make_server(root: Path, port: int = DEFAULT_PORT, token: str | None = None) 
                 if path == "/api/shutdown":
                     self._json(HTTPStatus.ACCEPTED, {"action": "shutdown"})
                     threading.Thread(target=self.server.shutdown, daemon=True).start()
+                    return
+                if path == SESSIONS_PATH:
+                    self._json(HTTPStatus.CREATED, {"session": app.chat.create(body)})
+                    return
+                if path == TEAMS_PATH:
+                    self._json(HTTPStatus.CREATED, {"team": app.chat.save_team(body)})
+                    return
+                output = SESSION_OUTPUT_PATH.fullmatch(path)
+                if output and output[2] == "branch":
+                    self._json(HTTPStatus.CREATED, {"session": app.chat.branch(output[1], body)})
+                    return
+                if output and output[2] == "handoff" and not chat_only:
+                    self._json(HTTPStatus.CREATED, {"task_id": app.handoff(output[1], body)})
+                    return
+                session = SESSION_PATH.fullmatch(path)
+                if session and session[2]:
+                    self._json(HTTPStatus.ACCEPTED, app.chat.send(session[1], body))
+                    return
+                live = SESSION_LIVE_PATH.fullmatch(path)
+                if live and live[2] == "cancel":
+                    self._json(HTTPStatus.ACCEPTED, app.chat.cancel(live[1], body))
+                    return
+                run = RUN_ACTION_PATH.fullmatch(path)
+                if run:
+                    self._json(HTTPStatus.ACCEPTED, app.chat.control(*run.groups(), body))
+                    return
+                if chat_only:
+                    self._error(HTTPStatus.NOT_FOUND, "Not found")
                     return
                 if path == "/api/tasks":
                     task_id = app.create(body.get("prompt"), body.get("roles"), body.get("recipient", "all"))
@@ -321,7 +533,13 @@ def make_server(root: Path, port: int = DEFAULT_PORT, token: str | None = None) 
                     self._json(HTTPStatus.ACCEPTED, {"task_id": match.group(1), "action": match.group(2)})
                     return
                 self._error(HTTPStatus.NOT_FOUND, "Not found")
-            except (ValueError, json.JSONDecodeError) as error:
+            except KeyError:
+                self._error(HTTPStatus.NOT_FOUND, "Conversation not found")
+            except ChatConflict as error:
+                self._error(HTTPStatus.CONFLICT, str(error))
+            except ChatBusy as error:
+                self._error(HTTPStatus.SERVICE_UNAVAILABLE, str(error))
+            except ValueError as error:
                 self._error(HTTPStatus.BAD_REQUEST, str(error))
             except Exception:
                 self._error(HTTPStatus.INTERNAL_SERVER_ERROR, "Unable to run action")
@@ -331,22 +549,23 @@ def make_server(root: Path, port: int = DEFAULT_PORT, token: str | None = None) 
     return server
 
 
-def running_instance(root: Path, port: int) -> bool:
+def running_instance(root: Path, port: int, *, chat_only: bool = False) -> bool:
     """Return whether the dashboard for this project is already listening on port."""
     connection = http.client.HTTPConnection("127.0.0.1", port, timeout=1)
     try:
         connection.request("GET", "/api/ping")
         response = connection.getresponse()
         data = json.loads(response.read())
-        return response.status == 200 and data.get("app") == "ai-team" and Path(data["root"]) == root.resolve()
+        expected = "ai-team-chat" if chat_only else "ai-team"
+        return response.status == 200 and data.get("app") == expected and Path(data["root"]) == root.resolve()
     except (OSError, ValueError, KeyError, TypeError):
         return False
     finally:
         connection.close()
 
 
-def _reopen(root: Path, port: int, open_browser: bool) -> bool:
-    if not running_instance(root, port):
+def _reopen(root: Path, port: int, open_browser: bool, *, chat_only: bool = False) -> bool:
+    if not running_instance(root, port, chat_only=chat_only):
         return False
     url = f"http://127.0.0.1:{port}/"
     print(f"AI Team is already running at {url}")
@@ -355,29 +574,31 @@ def _reopen(root: Path, port: int, open_browser: bool) -> bool:
     return True
 
 
-def run_ui(root: Path, port: int = DEFAULT_PORT, open_browser: bool = True) -> None:
+def run_ui(root: Path, port: int = DEFAULT_PORT, open_browser: bool = True, *, chat_only: bool = False) -> None:
     # A nonzero port starts a short search so each project keeps a stable address and a
     # second launch reopens the existing dashboard. Port 0 always picks a fresh free port.
-    port_file = team_dir(root) / "ui-port"
+    team_dir(root).mkdir(exist_ok=True)
+    port_file = team_dir(root) / ("chat-port" if chat_only else "ui-port")
     try:
         recorded = int(port_file.read_text(encoding="utf-8"))
     except (OSError, ValueError):
         recorded = None
-    if port and recorded and _reopen(root, recorded, open_browser):
+    if port and recorded and _reopen(root, recorded, open_browser, chat_only=chat_only):
         return
     server = None
     for candidate in range(port, port + PORT_ATTEMPTS) if port else [0]:
         try:
-            server = make_server(root, candidate)
+            server = make_server(root, candidate, chat_only=chat_only)
             break
         except OSError:
             # Binding first keeps a normal launch instant; probing a closed port on Windows takes a second.
-            if candidate and _reopen(root, candidate, open_browser):
+            if candidate and _reopen(root, candidate, open_browser, chat_only=chat_only):
                 return
     if server is None:
         raise RuntimeError(f"Ports {port}-{port + PORT_ATTEMPTS - 1} are in use; pass --port 0 to pick a free port")
     port_file.write_text(str(server.server_port), encoding="utf-8")
-    threading.Thread(target=server.app.refresh_quotas, daemon=True, name="ai-team-usage").start()  # type: ignore[attr-defined]
+    if not chat_only:
+        threading.Thread(target=server.app.refresh_quotas, daemon=True, name="ai-team-usage").start()
     url = f"http://127.0.0.1:{server.server_port}/"
     print(f"AI Team is running at {url}")
     print("Press Ctrl+C or use Quit in the dashboard to stop. Agent turns still running are interrupted on exit.")

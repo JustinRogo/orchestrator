@@ -13,12 +13,12 @@ class GitWorkspaceManager:
         self.base = self.root / ".ai-team" / "worktrees"
         self._git("rev-parse", "--show-toplevel")
 
-    def _git(self, *args: str, cwd: Path | None = None) -> str:
+    def _git(self, *args: str, cwd: Path | None = None, strip_output: bool = True) -> str:
         result = subprocess.run(["git", *args], cwd=cwd or self.root, text=True,
                                 capture_output=True, check=False, creationflags=console_flags())
         if result.returncode:
             raise RuntimeError(f"git {' '.join(args)}: {result.stderr.strip()}")
-        return result.stdout.strip()
+        return result.stdout.strip() if strip_output else result.stdout
 
     def path(self, task_id: str, agent: str) -> Path:
         if not re.fullmatch(r"[a-f0-9]{12}", task_id) or agent not in {"codex", "claude", "gemini"}:
@@ -81,7 +81,7 @@ class GitWorkspaceManager:
 
     def changed_files(self, path: Path, base: str = "HEAD") -> list[str]:
         self.verify(path)
-        output = self._git("status", "--porcelain", "--untracked-files=all", cwd=path)
+        output = self._git("status", "--porcelain", "--untracked-files=all", cwd=path, strip_output=False)
         committed = self._git("diff", "--name-only", base, "--", ".", cwd=path)
         return sorted(set([line[3:] for line in output.splitlines() if len(line) > 3] + committed.splitlines()))
 

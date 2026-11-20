@@ -13,12 +13,13 @@ from .process import console_flags
 
 def parser() -> argparse.ArgumentParser:
     app = argparse.ArgumentParser(prog="ai-team", description="Local multi-agent development coordinator")
-    app.add_argument("--project", type=Path, default=Path.cwd(), help="Git repository root")
+    app.add_argument("--project", type=Path, default=Path.cwd(), help="Git repository or chat workspace directory")
     sub = app.add_subparsers(dest="command", required=True)
     sub.add_parser("init")
     ui = sub.add_parser("ui", help="Open the local browser interface")
     ui.add_argument("--port", type=int, default=8765)
     ui.add_argument("--no-browser", action="store_true")
+    ui.add_argument("--chat-only", action="store_true", help="Open Chat Mode without Git or agent CLIs")
     sub.add_parser("shortcut", help="Create a desktop shortcut that opens the interface for this project")
     start = sub.add_parser("start")
     start.add_argument("prompt")
@@ -108,6 +109,13 @@ def main(argv: list[str] | None = None) -> int:
             stream.reconfigure(errors="replace")
     args = parser().parse_args(argv)
     try:
+        if args.command == "ui" and args.chat_only:
+            from .server import run_ui
+            root = args.project.resolve()
+            if not root.is_dir():
+                raise ValueError("Choose an existing directory for your chat workspace.")
+            run_ui(root, args.port, not args.no_browser, chat_only=True)
+            return 0
         root = project_root(args.project.resolve())
         if args.command == "init":
             path = initialize(root)

@@ -42,6 +42,8 @@
     .stopped { position: fixed; inset: 0; background: #0b1018f2; display: grid; place-items: center; text-align: center; z-index: 20; padding: 24px; }
     .stopped h2 { margin: 0 0 8px; font-size: 20px; }
     .local-tag { border: 1px solid #46655c; color: #a7dec8; border-radius: 999px; font-size: 11px; padding: 5px 9px; white-space: nowrap; }
+    .mode-link { color: #d5f78d; font-size: 12px; white-space: nowrap; text-underline-offset: 3px; }
+    @media (max-width: 450px) { .topbar .local-tag { display: none; } }
     .content { flex: 1; min-height: 0; overflow: auto; padding: 28px; }
     .hero { display: flex; justify-content: space-between; align-items: start; gap: 16px; margin-bottom: 25px; }
     h1 { font-size: 25px; letter-spacing: -.035em; line-height: 1.2; margin: 0 0 8px; }
@@ -116,7 +118,7 @@
       <section class="agents"><div class="section-label">Agents</div><div id="agents"></div></section>
     </aside>
     <main class="main">
-      <div class="topbar"><p id="project" class="topbar-title">Team workspace</p><span class="topbar-right"><span class="local-tag">● Local session</span><button id="quit" class="quit" type="button" title="Stop the local AI Team server">Quit</button></span></div>
+      <div class="topbar"><p id="project" class="topbar-title">Team workspace</p><span class="topbar-right"><a class="mode-link" href="__CHAT_MODE_URL__">Chat Mode</a><span class="local-tag">● Local session</span><button id="quit" class="quit" type="button" title="Stop the local AI Team server">Quit</button></span></div>
       <div class="content">
         <div class="hero"><div><h1 id="title">Choose a task</h1><p class="subtitle" id="subtitle">Your agents' conversation appears here.</p></div><span id="status" class="status hidden"></span></div>
         <div id="actions" class="actions hidden"><button id="retry" class="button">Retry failed turn</button><button id="resume" class="button">Resume</button><button id="stop" class="button danger">Stop after current turn</button><button id="refresh" class="button">Refresh</button></div>

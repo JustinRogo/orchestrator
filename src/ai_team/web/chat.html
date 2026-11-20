@@ -1,0 +1,809 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Chat Mode · AI Team</title>
+  <style>
+    :root { color-scheme: dark; font-family: Inter, Segoe UI, system-ui, sans-serif; background: #0b1018; color: #e9edf4; }
+    * { box-sizing: border-box; }
+    body { margin: 0; }
+    [hidden] { display: none !important; }
+    ::selection { background: #d5f78d; color: #19250b; }
+    :focus-visible { outline: 2px solid #d5f78d; outline-offset: 3px; }
+    a { color: #d5f78d; text-underline-offset: 3px; }
+    button, select, textarea, input { font: inherit; }
+    button, select, summary, input[type="checkbox"] { cursor: pointer; }
+    button:disabled, select:disabled { cursor: not-allowed; opacity: .58; }
+    input, select, textarea { border: 1px solid #43546b; border-radius: 9px; background: #111925; color: inherit; padding: 9px 11px; min-width: 0; }
+    input[type="checkbox"] { accent-color: #d5f78d; }
+    textarea { resize: vertical; line-height: 1.45; caret-color: #d5f78d; }
+    button, .new { border: 1px solid #43546b; border-radius: 9px; background: #1a2738; color: #e4edf8; padding: 9px 13px; font-size: 13px; font-weight: 650; }
+    button:hover:not(:disabled), .new:hover { background: #283b50; }
+    .danger { color: #ffc2b5; border-color: #96594f; }
+    .primary { background: #d5f78d; color: #18230b; border-color: #d5f78d; }
+    .primary:hover:not(:disabled) { background: #e2ffa9; }
+    .layout { display: grid; grid-template-columns: 260px minmax(0, 1fr); min-height: 100dvh; }
+    aside { background: #111925; border-right: 1px solid #283347; padding: 22px 16px; min-width: 0; }
+    .brand { display: flex; align-items: center; gap: 11px; margin: 0 6px 24px; font-size: 19px; font-weight: 750; letter-spacing: -.025em; }
+    .mark { display: grid; place-items: center; width: 31px; height: 31px; border-radius: 9px; background: #d5f78d; color: #19250b; font-size: 16px; }
+    .new { display: block; text-decoration: none; margin-bottom: 24px; text-align: center; }
+    aside h2 { margin: 0 8px 8px; font-size: 13px; color: #b0bfd2; }
+    #sessions { display: grid; gap: 4px; max-height: 65dvh; overflow: auto; scrollbar-color: #43546b transparent; }
+    #sessions a { min-width: 0; display: block; border: 1px solid transparent; border-radius: 9px; padding: 9px 10px; text-decoration: none; color: #e4edf8; font-size: 13px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+    #sessions a:hover { background: #1a2738; }
+    #sessions a[aria-current="page"] { background: #203147; border-color: #45617b; }
+    #sessions p { margin: 8px; }
+    main { height: 100dvh; min-height: 460px; display: flex; flex-direction: column; min-width: 0; }
+    header { border-bottom: 1px solid #283347; min-height: 69px; display: flex; align-items: center; gap: 14px; justify-content: space-between; padding: 12px clamp(16px, 4vw, 40px); }
+    header strong { font-size: 14px; }
+    header nav { display: flex; align-items: center; gap: 16px; font-size: 13px; }
+    .scroll { flex: 1; overflow: auto; padding: 26px clamp(16px, 4vw, 40px); scrollbar-color: #43546b transparent; }
+    .measure { width: 100%; max-width: 740px; margin-inline: auto; }
+    h1 { margin: 0 0 12px; font-size: clamp(22px, 4vw, 28px); letter-spacing: -.025em; overflow-wrap: anywhere; }
+    h1:focus { outline: none; }
+    p { margin: 0 0 12px; }
+    .muted { font-size: 13px; color: #aabbd1; line-height: 1.5; }
+    .notice { margin: 0 0 16px; line-height: 1.5; color: #ffc2b5; font-size: 13px; }
+    .visually-hidden { position: absolute; width: 1px; height: 1px; padding: 0; margin: -1px; overflow: hidden; clip-path: inset(50%); white-space: nowrap; }
+    form, .field { display: grid; gap: 9px; }
+    label, summary { font-size: 13px; font-weight: 650; }
+    select { width: 100%; }
+    details { margin: 6px 0; }
+    details > :first-child { margin-bottom: 8px; }
+    .settings { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin-top: 14px; }
+    .actions { display: flex; justify-content: flex-end; gap: 10px; align-items: center; }
+    .convo-meta { margin-bottom: 25px; }
+    .turn { margin-bottom: 22px; }
+    .entry { padding: 12px 15px; border: 1px solid #283347; border-radius: 12px; background: #131e2c; margin-bottom: 9px; }
+    .entry.user { margin-left: clamp(0px, 7vw, 74px); background: #222b42; border-color: #3c4a6a; }
+    .entry.assistant { margin-right: clamp(0px, 7vw, 74px); }
+    .speaker { font-size: 13px; font-weight: 750; margin: 0 0 7px; color: #d5f78d; overflow-wrap: anywhere; }
+    .user .speaker { color: #e2d6fc; }
+    .text { white-space: pre-wrap; overflow-wrap: anywhere; font-size: 14px; line-height: 1.6; margin: 0; }
+    .usage { margin: 8px 0 0; }
+    .compose { padding: 14px 24px 16px; padding-inline: clamp(16px, 4vw, 40px); background: #111925; border-top: 1px solid #283347; }
+    .compose .notice, .compose .muted { margin: 0; }
+    .consent { display: flex; gap: 8px; align-items: start; color: #ffdfac; line-height: 1.45; }
+    .consent input { margin-top: 3px; }
+    .group-workspace { max-width: 1040px; }
+    .participants, .reply-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 210px), 1fr)); gap: 10px; }
+    .reply-grid .entry { min-width: 0; margin: 0; }
+    .run { margin-bottom: 28px; padding-bottom: 24px; border-bottom: 1px solid #283347; }
+    .run h2 { margin: 0 0 8px; font-size: 17px; }
+    .run h3 { margin: 17px 0 8px; font-size: 14px; }
+    .run h4 { margin: 0 0 7px; }
+    .run-tools, .reply-tools { display: flex; flex-wrap: wrap; gap: 7px; align-items: center; margin: 9px 0; }
+    .run-tools.live { position: sticky; top: 0; z-index: 1; background: #0b1018; padding-block: 5px; }
+    .run-tools button, .reply-tools button { font-size: 12px; }
+    .picked { border-color: #90ad60; }
+    .run a { overflow-wrap: anywhere; }
+    .synthesis { margin: 12px 0 0; }
+    .synthesis dt { color: #d5f78d; font-size: 13px; font-weight: 700; margin: 13px 0 4px; }
+    .synthesis dd { margin: 0; }
+    .synthesis ul { margin: 0; padding-left: 19px; }
+    dialog { width: min(480px, calc(100% - 30px)); max-height: 90dvh; overflow: auto; border: 1px solid #43546b; border-radius: 13px; background: #131e2c; color: inherit; padding: 20px; }
+    dialog::backdrop { background: #0b1018cc; }
+    dialog h2 { margin: 0; font-size: 20px; }
+    @media (max-width: 700px) {
+      .layout { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); height: 100dvh; }
+      aside { border-right: 0; border-bottom: 1px solid #283347; padding: 14px 16px; }
+      .sidebar-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 10px; }
+      .brand, .new { margin: 0; }
+      #sessions { max-height: 5rem; }
+      main { height: auto; min-height: 0; }
+      .scroll { padding-block: 20px; }
+      header { min-height: 56px; }
+    }
+    @media (max-width: 700px) and (max-height: 620px) {
+      .layout { height: auto; }
+      .scroll { overflow: visible; }
+    }
+    @media (max-width: 410px) { .settings { grid-template-columns: 1fr; } header { flex-wrap: wrap; } header nav { gap: 10px; } }
+  </style>
+</head>
+<body>
+  <div class="layout">
+    <aside aria-label="Conversation history">
+      <div class="sidebar-head"><div class="brand"><span class="mark" aria-hidden="true">A</span>AI Team</div><a class="new" href="#new">New conversation</a></div>
+      <h2>History</h2>
+      <nav id="sessions" aria-label="Saved conversations"><p class="muted">Loading history…</p></nav>
+    </aside>
+    <main>
+      <header><strong id="workspace-mode">Chat Mode</strong><nav aria-label="Workspace"><a href="__CODE_MODE_URL__" __CODE_LINK_HIDDEN__>Code Mode</a><a id="modern-chat" href="/chat/preview" __MODERN_CHAT_LINK_HIDDEN__>Chat Preview</a><button id="quit" type="button">Quit</button></nav></header>
+      <div class="scroll" id="scroll">
+        <div class="measure" id="workspace">
+          <p id="page-error" class="notice" role="alert" hidden></p>
+          <section id="new-conversation" hidden>
+            <h1>New conversation</h1>
+            <form id="create-form">
+              <div class="field"><label for="strategy">Mode</label><select id="strategy"><option value="single">Chat</option><option value="compare">Compare</option><option value="council">AI Council</option></select></div>
+              <p class="muted" id="strategy-help"></p>
+              <div class="field" id="single-model"><label for="initial-model">Model</label><select id="initial-model" required></select></div>
+              <div class="field" id="participant-fields" hidden>
+                <div class="participants">
+                  <div class="field"><label for="participant-1">First model</label><select id="participant-1"></select></div>
+                  <div class="field"><label for="participant-2">Second model</label><select id="participant-2"></select></div>
+                  <div class="field"><label for="participant-3">Third model (optional)</label><select id="participant-3"></select></div>
+                </div>
+                <div class="field"><label for="synthesizer">Synthesis model</label><select id="synthesizer"></select></div>
+              </div>
+              <details id="credentials" hidden><summary>API credentials</summary><p class="muted" id="credential-help"></p></details>
+              <details>
+                <summary>Conversation settings</summary>
+                <div class="field"><label for="system-prompt">System instructions</label><textarea id="system-prompt" rows="3" maxlength="4000"></textarea></div>
+                <div class="settings">
+                  <div class="field"><label for="max-turns">Maximum prompts</label><input type="number" id="max-turns" min="1" max="100" required></div>
+                  <div class="field"><label for="max-tokens">Output tokens per turn</label><input type="number" id="max-tokens" min="256" max="16384" required></div>
+                  <div class="field"><label for="timeout">Timeout in seconds</label><input type="number" id="timeout" min="5" max="180" required></div>
+                </div>
+                <div class="settings" id="run-settings" hidden>
+                  <div class="field"><label for="max-calls">Model calls per run</label><input type="number" id="max-calls" min="2" max="32" value="16" required></div>
+                  <div class="field"><label for="token-budget">Token budget per run</label><input type="number" id="token-budget" min="1" max="10000000" placeholder="Optional"></div>
+                  <div class="field" id="review-setting"><label for="review-rounds">Peer review rounds</label><input type="number" id="review-rounds" min="0" max="3" value="1" required></div>
+                </div>
+                <label id="auto-setting" class="consent" hidden><input id="auto-advance" type="checkbox">Advance through Council stages automatically</label>
+                <label id="parallel-setting" class="consent" hidden><input id="parallel" type="checkbox" checked>Run independent replies in parallel when the token budget allows</label>
+              </details>
+              <div class="actions"><button class="primary" id="create" type="submit" disabled>Start conversation</button></div>
+            </form>
+          </section>
+          <section id="conversation" hidden>
+            <h1 id="title" tabindex="-1"></h1>
+            <details class="convo-meta"><summary>Conversation settings</summary><p class="muted" id="saved-settings"></p><p class="text" id="saved-instructions"></p></details>
+            <p class="muted" id="empty">Send a message to begin.</p>
+            <p class="visually-hidden" id="run-status" role="status"></p>
+            <div id="turns"></div>
+          </section>
+        </div>
+      </div>
+      <div class="compose" id="composer" hidden>
+        <form class="measure" id="send-form">
+          <div class="field" id="next-model"><label for="model">Model for next reply</label><select id="model" required></select></div>
+          <details id="shared-context" hidden><summary>Shared context (optional)</summary><div class="field"><label for="context">Context for all selected models</label><textarea id="context" rows="2" maxlength="12000"></textarea></div></details>
+          <label id="consent" class="consent" hidden><input id="share" type="checkbox"><span id="share-label"></span></label>
+          <label for="prompt" id="prompt-label">Message</label>
+          <textarea id="prompt" rows="3" maxlength="12000" required></textarea>
+          <p class="notice" id="send-error" role="alert" hidden></p>
+          <p class="muted" id="send-status" role="status" aria-live="polite"></p>
+          <div class="actions"><button type="button" class="danger" id="cancel-reply" title="Cancel the local request. The provider may still charge for work it received." hidden>Cancel reply</button><button type="submit" class="primary" id="send">Send message</button></div>
+        </form>
+      </div>
+    </main>
+  </div>
+  <dialog id="run-dialog" aria-labelledby="dialog-title">
+    <form id="run-dialog-form">
+      <h2 id="dialog-title"></h2>
+      <p id="dialog-help" class="muted"></p>
+      <div class="field" id="followup-field"><label for="followup">Follow-up question</label><textarea id="followup" rows="3" maxlength="4000"></textarea></div>
+      <p class="notice" id="dialog-error" role="alert" hidden></p>
+      <div class="actions"><button type="button" id="dismiss-dialog">Cancel</button><button class="primary" type="submit" id="confirm-dialog">Continue</button></div>
+    </form>
+  </dialog>
+  <script>
+    const token = "__AI_TEAM_TOKEN__";
+    const $ = id => document.getElementById(id);
+    const sessionsPath = "/api/v1/sessions";
+    const inflight = new Set();
+    const retries = new Map();
+    const modeNames = {single: "Chat", compare: "Compare", council: "AI Council", roundtable: "Roundtable",
+      relay: "Collaborative Relay", debate: "Structured Debate"};
+    const classicStrategies = new Set(["single", "compare", "council"]);
+    const stageNames = {answer: "Independent answers", review: "Peer review", synthesis: "Synthesis", expand: "Follow-up"};
+    const participantFields = ["participant-1", "participant-2", "participant-3"];
+    let providers = [];
+    let current = null;
+    let currentData = null;
+    let eventConnection = null;
+    let loadSequence = 0;
+    let liveDrafts = {};
+    let creating = false;
+    let stopped = false;
+    let rendered = "";
+    let dialogAction = null;
+
+    async function api(path, body, signal) {
+      const options = {headers: {"X-AI-Team-Token": token}, cache: "no-store", signal};
+      if (body) {
+        options.method = "POST";
+        options.headers["Content-Type"] = "application/json";
+        options.body = JSON.stringify(body);
+      }
+      let response;
+      try { response = await fetch(path, options); }
+      catch (error) {
+        if (signal?.aborted) throw error;
+        throw new Error("Can’t reach AI Team. Relaunch it and reopen this conversation.");
+      }
+      if (response.status === 403) throw new Error("This window lost its connection. Reload to reconnect to AI Team.");
+      const data = await response.json();
+      if (!response.ok) throw new Error(data.error || "Request failed.");
+      return data;
+    }
+
+    function notice(id, message = "") {
+      $(id).textContent = message;
+      $(id).hidden = !message;
+    }
+
+    function providerName(id) {
+      return providers.find(provider => provider.id === id)?.name || {openai: "OpenAI", anthropic: "Anthropic", google: "Google"}[id] || id;
+    }
+
+    function populate(select, saved = "") {
+      select.replaceChildren();
+      for (const provider of providers) {
+        const group = document.createElement("optgroup");
+        group.label = provider.name + (provider.configured ? "" : " · API key required");
+        for (const model of provider.models) {
+          const option = new Option(model, `${provider.id}/${model}`);
+          option.disabled = !provider.configured;
+          group.append(option);
+        }
+        if (group.children.length) select.append(group);
+      }
+      if (saved && !Array.from(select.options).some(option => option.value === saved)) {
+        const option = new Option(`${saved.split("/")[1]} · unavailable`, saved);
+        option.disabled = true;
+        select.prepend(option);
+      }
+      const available = Array.from(select.options).find(option => !option.disabled);
+      if (!available && !saved) select.prepend(new Option("No model configured", ""));
+      select.value = saved || available?.value || "";
+    }
+
+    function choice(id) {
+      const option = $(id).selectedOptions[0];
+      if (!option?.value || option.disabled) return null;
+      const [provider, model] = option.value.split("/");
+      return {provider, model};
+    }
+
+    function creationSelection() {
+      const strategy = $("strategy").value;
+      if (strategy === "single") {
+        const selected = choice("initial-model");
+        return selected ? {strategy, ...selected} : null;
+      }
+      const participants = participantFields.map(choice).filter(Boolean);
+      if (!choice("participant-1") || !choice("participant-2") ||
+          new Set(participants.map(item => `${item.provider}/${item.model}`)).size !== participants.length) return null;
+      return {strategy, participants, synthesizer: Number($("synthesizer").value), auto_advance: $("auto-advance").checked,
+        review_rounds: $("review-rounds").valueAsNumber, max_invocations: $("max-calls").valueAsNumber,
+        token_budget: $("token-budget").valueAsNumber || null, parallel: $("parallel").checked};
+    }
+
+    function updateCreation() {
+      const strategy = $("strategy").value;
+      const group = strategy !== "single";
+      $("single-model").hidden = group;
+      $("initial-model").disabled = group;
+      $("participant-fields").hidden = !group;
+      $("run-settings").hidden = !group;
+      $("auto-setting").hidden = strategy !== "council";
+      $("parallel-setting").hidden = !group;
+      $("review-setting").hidden = strategy !== "council";
+      for (const field of ["max-calls", "token-budget"]) $(field).disabled = !group;
+      $("review-rounds").disabled = strategy !== "council";
+      const synth = $("synthesizer");
+      const selected = synth.selectedOptions[0]?.dataset.model;
+      const participants = participantFields.map(choice).filter(Boolean);
+      synth.replaceChildren(...participants.map((item, index) => {
+        const option = new Option(`${providerName(item.provider)} · ${item.model}`, String(index));
+        option.dataset.model = `${item.provider}/${item.model}`;
+        if (option.dataset.model === selected) option.selected = true;
+        return option;
+      }));
+      $("max-calls").min = Math.max(2, participants.length);
+      const selection = creationSelection();
+      $("strategy-help").textContent = {
+        single: "Talk with one model and switch models between replies.",
+        compare: "Send the same prompt to two or three models and read their independent replies side by side.",
+        council: "Start with independent answers, then review them together and synthesize points of agreement and disagreement."
+      }[strategy] + (group && !selection ? " Choose at least two distinct models with API keys." : "");
+      $("create").disabled = creating || !selection;
+    }
+
+    async function refreshList() {
+      const {sessions} = await api(sessionsPath);
+      const list = $("sessions");
+      list.replaceChildren();
+      if (!sessions.length) {
+        const empty = document.createElement("p");
+        empty.className = "muted";
+        empty.textContent = "No conversations yet.";
+        list.append(empty);
+      }
+      for (const session of sessions) {
+        const link = document.createElement("a");
+        link.href = classicStrategies.has(session.strategy) || $("modern-chat").hidden ? `#${session.id}` : `/chat#${session.id}`;
+        link.textContent = session.strategy === "single" ? session.title : `${modeNames[session.strategy]} · ${session.title}`;
+        link.title = link.textContent;
+        if (session.id === current) link.setAttribute("aria-current", "page");
+        list.append(link);
+      }
+    }
+
+    function entry(className, name, content, metadata) {
+      const article = document.createElement("article");
+      article.className = `entry ${className}`;
+      const author = document.createElement("h2");
+      author.className = "speaker";
+      author.textContent = name;
+      const text = document.createElement("p");
+      text.className = "text";
+      text.textContent = content;
+      article.append(author, text);
+      if (metadata) {
+        const usage = document.createElement("p");
+        usage.className = "usage muted";
+        usage.textContent = metadata;
+        article.append(usage);
+      }
+      return article;
+    }
+
+    function drawTurns(turns) {
+      const key = JSON.stringify(turns.map(turn => [turn.id, turn.status]));
+      if (key === rendered) return;
+      rendered = key;
+      const scroller = $("scroll");
+      const atEnd = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 80;
+      const entries = turns.map(turn => {
+        const group = document.createElement("div");
+        group.className = "turn";
+        const actor = `${providerName(turn.provider)} · ${turn.response_model || turn.model}`;
+        const tokens = turn.total_tokens ?? null;
+        const usage = tokens === null ? "Total tokens unavailable" : `${tokens.toLocaleString()} tokens`;
+        const notes = [usage, "Cost unknown"];
+        if (turn.context_truncated) notes.push("Context shortened");
+        if (turn.output_limited) notes.push("Output limit reached");
+        group.append(entry("user", "You", turn.prompt));
+        if (turn.status === "complete") group.append(entry("assistant", actor, turn.response, notes.join(" · ")));
+        else {
+          const pending = entry("assistant", actor, turn.error || "Waiting for a response…", tokens === null ? "" : notes.join(" · "));
+          if (turn.status === "pending") {
+            const text = pending.querySelector(".text");
+            markDraft(text, `turn:${turn.id}`);
+          }
+          group.append(pending);
+        }
+        return group;
+      });
+      $("turns").replaceChildren(...entries);
+      $("empty").hidden = Boolean(turns.length);
+      if (atEnd) scroller.scrollTop = scroller.scrollHeight;
+    }
+
+    const activeRun = run => ["running", "pausing", "stopping"].includes(run.status);
+    const requestId = () => crypto.randomUUID().replaceAll("-", "");
+
+    function markDraft(element, key) {
+      element.dataset.draftKey = key;
+      element.dataset.waiting = element.textContent;
+    }
+
+    function paintDrafts(drafts) {
+      const scroller = $("scroll");
+      const atEnd = scroller.scrollHeight - scroller.scrollTop - scroller.clientHeight < 80;
+      for (const node of $("turns").querySelectorAll("[data-draft-key]")) {
+        const value = drafts[node.dataset.draftKey] || node.dataset.waiting;
+        if (node.textContent !== value) node.textContent = value;
+      }
+      if (atEnd) scroller.scrollTop = scroller.scrollHeight;
+    }
+
+    function textElement(tag, text, className = "") {
+      const element = document.createElement(tag);
+      element.textContent = text;
+      if (className) element.className = className;
+      return element;
+    }
+
+    async function runAction(run, action, body = {}) {
+      const id = current;
+      const result = await api(`${sessionsPath}/${id}/runs/${run.id}/${action}`, {revision: run.revision, ...body});
+      if (id !== current) return;
+      if (result.session_id) location.hash = result.session_id;
+      else await loadSession(id);
+    }
+
+    function actionButton(label, run, action, body = {}, dialog = null) {
+      const button = textElement("button", label);
+      button.type = "button";
+      if (action === "cancel") {
+        button.classList.add("danger");
+        button.title = "Cancel local requests. Providers may still charge for work they received.";
+      }
+      button.addEventListener("click", async () => {
+        if (dialog) {
+          $("dialog-title").textContent = label;
+          $("dialog-help").textContent = dialog;
+          $("followup-field").hidden = action !== "expand";
+          $("followup").required = action === "expand";
+          $("followup").value = "";
+          $("confirm-dialog").textContent = action === "expand" ? "Send follow-up" : "Share replies";
+          notice("dialog-error");
+          dialogAction = {run, action, body: {...body, share_history: true, request_id: requestId()}};
+          $("run-dialog").showModal();
+          return;
+        }
+        button.disabled = true;
+        notice("send-error");
+        try { await runAction(run, action, body); }
+        catch (error) { notice("send-error", error.message); await loadSession(current).catch(() => {}); }
+        finally { button.disabled = false; }
+      });
+      return button;
+    }
+
+    function synthesisDetails(values) {
+      const detail = document.createElement("dl");
+      detail.className = "synthesis";
+      const headings = {recommendation: "Recommendation", agreement: "Agreement", disagreement: "Disagreement", uncertainties: "Uncertainties", next_steps: "Next steps"};
+      for (const [key, title] of Object.entries(headings)) {
+        const description = document.createElement("dd");
+        if (Array.isArray(values[key]) && values[key].length) {
+          const list = textElement("ul", "", "text");
+          list.append(...values[key].map(item => textElement("li", item)));
+          description.append(list);
+        } else description.append(textElement("p", values[key]?.length ? values[key] : "None reported.", "text"));
+        detail.append(textElement("dt", title), description);
+      }
+      return detail;
+    }
+
+    function replyCard(session, run, stage, target, postAllowed) {
+      const model = session.strategy_options.participants[target];
+      const attempts = stage.replies.filter(reply => reply.participant === target);
+      const reply = attempts.at(-1);
+      const author = `${providerName(model.provider)} · ${reply?.response_model || model.model}`;
+      const panel = document.createElement("article");
+      panel.className = `entry${reply && run.selected_reply === reply.id ? " picked" : ""}`;
+      panel.append(textElement("h4", author, "speaker"));
+      if (!reply) {
+        const ended = stage.done || ["stopped", "limited", "cancelled"].includes(run.status);
+        panel.append(textElement("p", ended ? "Skipped" : "Waiting to run", "muted"));
+        return panel;
+      }
+      if (reply.error) panel.append(textElement("p", reply.error, "notice"));
+      if (reply.synthesis) panel.append(synthesisDetails(reply.synthesis));
+      else if (reply.response) panel.append(textElement("p", reply.response, "text"));
+      else if (reply.status === "pending") {
+        const text = textElement("p", "Waiting for this model…", "text");
+        markDraft(text, `run:${run.id}:reply:${reply.id}`);
+        panel.append(text);
+      }
+      const source = reply.input_reply_ids.length ? `Replies ${reply.input_reply_ids.map(id => `#${id}`).join(", ")}` : "Shared prompt and user context";
+      const usage = reply.status === "pending" ? "In progress" : reply.total_tokens == null ? "Tokens unavailable" : `${reply.total_tokens.toLocaleString()} tokens`;
+      const details = [`Reply #${reply.id}`, source, usage];
+      if (reply.finished_at) details.push(new Date(reply.finished_at).toLocaleTimeString([], {hour: "numeric", minute: "2-digit"}));
+      if (reply.imported) details.push("Imported from Compare");
+      if (reply.context_truncated || reply.output_limited) details.push("Text shortened");
+      panel.append(textElement("p", details.join(" · "), "usage muted"));
+      if (attempts.length > 1) {
+        const previous = document.createElement("details");
+        previous.append(textElement("summary", "Earlier attempts"));
+        for (const attempt of attempts.slice(0, -1)) {
+          previous.append(textElement("p", `Reply #${attempt.id} · ${attempt.error || attempt.status}`, "muted"));
+          if (attempt.response) previous.append(textElement("p", attempt.response, "text"));
+        }
+        panel.append(previous);
+      }
+      const tools = textElement("div", "", "reply-tools");
+      if (postAllowed && run.controls.retry.includes(reply.id)) tools.append(actionButton("Retry reply", run, "retry", {reply_id: reply.id}));
+      if (reply.status === "complete" && stage.kind !== "synthesis") {
+        if (session.strategy === "compare" && !run.inherited) {
+          const choose = actionButton(run.selected_reply === reply.id ? "Chosen reply" : "Choose reply", run, "choose", {reply_id: reply.id});
+          choose.setAttribute("aria-pressed", String(run.selected_reply === reply.id));
+          tools.append(choose);
+        }
+        if (postAllowed && run.controls.expand) tools.append(actionButton("Ask follow-up", run, "expand", {reply_id: reply.id}, `Only ${author} receives this question and its earlier reply.`));
+      }
+      if (tools.children.length) panel.append(tools);
+      return panel;
+    }
+
+    function drawRuns(session, runs) {
+      const key = JSON.stringify(runs.map(run => [run.id, run.revision]));
+      if (key === rendered) return;
+      rendered = key;
+      const anyActive = runs.some(activeRun);
+      $("empty").hidden = Boolean(runs.length);
+      $("run-status").textContent = runs.length ? `Latest run ${runs.at(-1).status}. ${stageNames[runs.at(-1).stages.at(-1).kind]}.` : "";
+      const sections = runs.map((run, index) => {
+        const section = textElement("section", "", "run");
+        section.dataset.runId = run.id;
+        section.append(textElement("h2", `Run ${index + 1}`), entry("user", "You", run.prompt));
+        if (run.context) {
+          const shared = document.createElement("details");
+          shared.append(textElement("summary", "Shared context"), textElement("p", run.context, "text"));
+          section.append(shared);
+        }
+        if (run.source) {
+          const link = textElement("a", "View source Compare conversation");
+          link.href = `#${run.source.session_id}`;
+          section.append(link);
+        }
+        const {budget, controls} = run;
+        const status = {ready: "Ready for the next stage", running: "Running", pausing: "Pausing after active calls", stopping: "Stopping after active calls", paused: "Paused", complete: "Finished", stopped: "Stopped", limited: "Limit reached", interrupted: "Interrupted", cancelled: "Cancelled"}[run.status];
+        const usage = activeRun(run) ? "Usage pending" : budget.used.tokens === null ? "Token total unavailable" : `${budget.used.tokens.toLocaleString()} tokens`;
+        const cap = budget.limit.tokens === null ? "" : ` / ${budget.limit.tokens.toLocaleString()} token budget`;
+        section.append(textElement("p", `${status}${run.incomplete ? " · Incomplete results" : ""} · ${budget.calls}/${budget.max_calls} model calls · ${usage}${cap}`, "muted"));
+        if (run.note) section.append(textElement("p", run.note, "notice"));
+        const postAllowed = !anyActive;
+        const tools = textElement("div", "", `run-tools${activeRun(run) ? " live" : ""}`);
+        if (activeRun(run)) tools.append(textElement("span", stageNames[run.stages.at(-1).kind], "muted"));
+        if (controls.pause) tools.append(actionButton("Pause after active calls", run, "pause"));
+        if (controls.stop) tools.append(actionButton(activeRun(run) ? "Stop after active calls" : "Stop run", run, "stop"));
+        if (controls.cancel) tools.append(actionButton("Cancel run", run, "cancel"));
+        if (postAllowed && controls.next) {
+          tools.append(actionButton(run.stages.at(-1).done ? "Next stage" : "Continue stage", run, "next"));
+          if (session.strategy === "council") tools.append(actionButton("Advance automatically", run, "next", {auto_advance: true}));
+        }
+        if (postAllowed && controls.synthesize) tools.append(actionButton("Synthesize now", run, "synthesize", {},
+          session.strategy === "compare" ? "Send the available replies to the selected synthesis model." : null));
+        if (controls.promote) tools.append(actionButton("Send to AI Council", run, "promote", {}, "Copy these independent answers into a new Council. Peer review and synthesis can then share them across the selected providers."));
+        if (tools.children.length) section.append(tools);
+        for (const stage of run.stages) {
+          const suffix = stage.kind === "review" ? ` ${run.stages.slice(0, stage.id).filter(item => item.kind === "review").length}` : "";
+          section.append(textElement("h3", stageNames[stage.kind] + suffix));
+          if (stage.instruction) section.append(textElement("p", stage.instruction, "text"));
+          const grid = textElement("div", "", "reply-grid");
+          grid.append(...stage.targets.map(target => replyCard(session, run, stage, target, postAllowed)));
+          section.append(grid);
+        }
+        return section;
+      });
+      const scroll = $("scroll");
+      const atEnd = scroll.scrollHeight - scroll.scrollTop - scroll.clientHeight < 80;
+      $("turns").replaceChildren(...sections);
+      if (atEnd && runs.length && anyActive) scroll.scrollTop = scroll.scrollHeight;
+    }
+
+    function updateComposer() {
+      if (!currentData || stopped) return;
+      const {session, turns = [], runs = [], context_providers: contextProviders = []} = currentData;
+      const group = session.strategy !== "single";
+      const selected = group ? null : choice("model");
+      const crossProvider = group ? session.strategy === "council" && new Set(session.strategy_options.participants.map(p => p.provider)).size > 1
+        : selected && contextProviders.some(provider => provider !== selected.provider);
+      const busy = inflight.has(session.id) || turns.at(-1)?.status === "pending" || runs.some(activeRun);
+      const limited = (group ? runs.length : turns.length) - (session.branch_source?.history_count || 0) >= session.max_turns;
+      $("next-model").hidden = group;
+      $("shared-context").hidden = !group;
+      $("consent").hidden = !crossProvider;
+      $("share-label").textContent = !crossProvider ? "" : group ? "Share Council replies across the selected providers" : `Send recent conversation history to ${providerName(selected.provider)}`;
+      $("model").disabled = group || busy || limited;
+      $("send").disabled = busy || limited || (!group && !selected) || (crossProvider && !$("share").checked);
+      $("cancel-reply").hidden = group || turns.at(-1)?.status !== "pending";
+      $("prompt").disabled = limited;
+      $("prompt-label").textContent = group ? "Shared prompt" : "Message";
+      $("send").textContent = group ? "Start run" : "Send message";
+      $("send-status").textContent = busy ? (group ? "Run in progress…" : "Reply in progress…") : limited ? "Prompt limit reached. Start a new conversation to continue."
+        : group ? "Each model receives this prompt and any shared context you enter." : !selected ? "Choose a model with a configured API key."
+        : "The selected provider receives this message and recent completed exchanges.";
+    }
+
+    async function loadSession(id, opening = false) {
+      const sequence = ++loadSequence;
+      const data = await api(`${sessionsPath}/${id}`);
+      if (id !== current || stopped || sequence !== loadSequence) return;
+      const {session, turns = [], runs = []} = data;
+      if (!classicStrategies.has(session.strategy)) {
+        if ($("modern-chat").hidden) throw new Error("This conversation requires the React dashboard. Build the frontend to open it.");
+        location.replace(`/chat#${id}`);
+        return;
+      }
+      const group = session.strategy !== "single";
+      currentData = data;
+      $("workspace").classList.toggle("group-workspace", group);
+      $("workspace-mode").textContent = group ? modeNames[session.strategy] : "Chat Mode";
+      $("title").textContent = session.title;
+      const settings = [`${session.max_turns} prompts`, `${session.max_output_tokens} output tokens per reply`, `${session.timeout_seconds}s timeout`];
+      if (group) {
+        const {participants, synthesizer, review_rounds: rounds} = session.strategy_options;
+        settings.push(`Synthesis by ${participants[synthesizer].model}`);
+        if (!session.strategy_options.token_budget && session.strategy_options.parallel !== false) settings.push("Parallel independent replies");
+        if (session.strategy === "council") settings.push(`${rounds} planned peer review ${rounds === 1 ? "round" : "rounds"}`);
+      }
+      $("saved-settings").textContent = settings.join(" · ");
+      $("saved-instructions").textContent = session.system_prompt || "No system instructions.";
+      $("empty").textContent = group ? "Enter a shared prompt to start a run." : "Send a message to begin.";
+      $("conversation").hidden = false;
+      $("composer").hidden = false;
+      if (opening && !group) populate($("model"), `${session.provider}/${session.model}`);
+      if (group) drawRuns(session, runs);
+      else drawTurns(turns);
+      paintDrafts(liveDrafts);
+      updateComposer();
+      if (opening) $("title").focus({preventScroll: true});
+    }
+
+    async function watchEvents(id, signal) {
+      let cursor = null;
+      let durable = null;
+      while (!signal.aborted) {
+        try {
+          const query = cursor === null ? "" : `?after=${cursor}`;
+          const event = await api(`${sessionsPath}/${id}/events${query}`, null, signal);
+          if (signal.aborted || current !== id) return;
+          const active = currentData?.turns?.at(-1)?.status === "pending" || currentData?.runs?.some(activeRun);
+          liveDrafts = event.drafts;
+          if (durable !== event.state_sequence || (active && cursor === event.sequence)) await loadSession(id);
+          if (signal.aborted || current !== id) return;
+          paintDrafts(event.drafts);
+          cursor = event.sequence;
+          durable = event.state_sequence;
+        } catch (_) {
+          if (signal.aborted || current !== id) return;
+          cursor = null;
+          durable = null;
+          await loadSession(id).catch(() => {
+            if (!signal.aborted) $("send-status").textContent = "Reconnecting live updates…";
+          });
+          await new Promise(resolve => setTimeout(resolve, 1200));
+        }
+      }
+    }
+
+    async function navigate() {
+      eventConnection?.abort();
+      eventConnection = new AbortController();
+      const signal = eventConnection.signal;
+      const hash = location.hash.slice(1);
+      current = /^[a-f0-9]{32}$/.test(hash) ? hash : null;
+      const id = current;
+      currentData = null;
+      liveDrafts = {};
+      rendered = "";
+      $("workspace-mode").textContent = "Chat Mode";
+      $("workspace").classList.remove("group-workspace");
+      $("run-status").textContent = "";
+      $("share").checked = false;
+      $("prompt").value = retries.get(id)?.prompt || "";
+      $("context").value = retries.get(id)?.context || "";
+      $("shared-context").open = Boolean($("context").value);
+      if ($("run-dialog").open) $("run-dialog").close();
+      notice("page-error");
+      notice("send-error");
+      $("new-conversation").hidden = Boolean(id);
+      $("conversation").hidden = true;
+      $("composer").hidden = true;
+      try {
+        await Promise.all([refreshList(), id ? loadSession(id, true) : null]);
+        if (id && !signal.aborted) watchEvents(id, signal);
+      }
+      catch (error) { if (current === id) notice("page-error", error.message); }
+    }
+
+    $("create-form").addEventListener("submit", async event => {
+      event.preventDefault();
+      const selected = creationSelection();
+      if (!selected || creating) return;
+      creating = true;
+      $("create").disabled = true;
+      notice("page-error");
+      try {
+        const {session} = await api(sessionsPath, {...selected, system_prompt: $("system-prompt").value,
+          max_turns: $("max-turns").valueAsNumber, max_output_tokens: $("max-tokens").valueAsNumber,
+          timeout_seconds: $("timeout").valueAsNumber});
+        location.hash = session.id;
+      } catch (error) { notice("page-error", error.message); }
+      finally { creating = false; updateCreation(); }
+    });
+
+    $("send-form").addEventListener("submit", async event => {
+      event.preventDefault();
+      const id = current;
+      const group = currentData?.session.strategy !== "single";
+      const selected = group ? {} : choice("model");
+      const prompt = $("prompt").value.trim();
+      const context = group ? $("context").value.trim() : "";
+      if (!id || !selected || !prompt || inflight.has(id) || $("send").disabled) return;
+      const previous = retries.get(id);
+      const same = previous?.prompt === prompt && previous.context === context && previous.provider === selected.provider && previous.model === selected.model;
+      const body = {...selected, prompt, context, request_id: same ? previous.request_id : requestId(), share_history: $("share").checked};
+      retries.set(id, body);
+      inflight.add(id);
+      notice("send-error");
+      updateComposer();
+      try {
+        await api(`${sessionsPath}/${id}/messages`, body);
+        retries.delete(id);
+        if (current !== id) return;
+        if ($("prompt").value.trim() === prompt) $("prompt").value = "";
+        if (group && $("context").value.trim() === context) {
+          $("context").value = "";
+          $("shared-context").open = false;
+        }
+        await Promise.all([loadSession(id), refreshList()]);
+      } catch (error) {
+        if (current === id) {
+          notice("send-error", error.message);
+        }
+      } finally {
+        inflight.delete(id);
+        if (current === id) updateComposer();
+      }
+    });
+
+    $("cancel-reply").addEventListener("click", async () => {
+      const id = current;
+      const turn = currentData?.turns?.at(-1);
+      if (!id || turn?.status !== "pending") return;
+      $("cancel-reply").disabled = true;
+      notice("send-error");
+      try {
+        await api(`${sessionsPath}/${id}/cancel`, {turn_id: turn.id});
+        if (current === id) await loadSession(id);
+      } catch (error) {
+        if (current === id) notice("send-error", error.message);
+      } finally { $("cancel-reply").disabled = false; }
+    });
+
+    for (const field of ["strategy", "initial-model", ...participantFields]) $(field).addEventListener("change", updateCreation);
+    $("run-dialog-form").addEventListener("submit", async event => {
+      event.preventDefault();
+      if (!dialogAction || $("confirm-dialog").disabled) return;
+      $("confirm-dialog").disabled = true;
+      const {run, action, body} = dialogAction;
+      try {
+        await runAction(run, action, {...body, instruction: $("followup").value});
+        $("run-dialog").close();
+      } catch (error) { notice("dialog-error", error.message); }
+      finally { $("confirm-dialog").disabled = false; }
+    });
+    $("dismiss-dialog").addEventListener("click", () => $("run-dialog").close());
+    $("model").addEventListener("change", () => { $("share").checked = false; updateComposer(); });
+    $("share").addEventListener("change", updateComposer);
+    $("prompt").addEventListener("keydown", event => {
+      if (event.key === "Enter" && (event.ctrlKey || event.metaKey) && !$("send").disabled) {
+        event.preventDefault();
+        $("send-form").requestSubmit();
+      }
+    });
+    $("quit").addEventListener("click", async () => {
+      try {
+        await api("/api/shutdown", {});
+        stopped = true;
+        eventConnection?.abort();
+        $("quit").disabled = true;
+        $("composer").hidden = true;
+        $("new-conversation").hidden = true;
+        notice("page-error", "AI Team has stopped. You can close this tab.");
+      } catch (error) { notice("page-error", error.message); }
+    });
+
+    async function initialize() {
+      let issue = "";
+      try {
+        const data = await api("/api/v1/models");
+        providers = data.providers;
+        $("max-turns").value = data.defaults.max_turns;
+        $("max-tokens").value = data.defaults.max_output_tokens;
+        $("timeout").value = data.defaults.timeout_seconds;
+        const missing = providers.filter(provider => !provider.configured && provider.models.length);
+        if (missing.length) {
+          $("credentials").hidden = false;
+          $("credentials").open = missing.length === providers.length;
+          $("credential-help").textContent = `Set ${missing.map(provider => provider.credential_variable).join(", ")} in the server environment for the providers you want to use, then relaunch AI Team.`;
+        }
+      } catch (error) { issue = error.message; }
+      populate($("initial-model"));
+      const available = Array.from($("initial-model").options).filter(option => option.value && !option.disabled);
+      participantFields.forEach((id, index) => {
+        populate($(id));
+        $(id).prepend(new Option(index === 2 ? "No third model" : "Choose a model", ""));
+        $(id).value = index < 2 ? available[index]?.value || "" : "";
+      });
+      updateCreation();
+      window.addEventListener("hashchange", () => { if (!stopped) navigate(); });
+      await navigate();
+      if (issue) notice("page-error", issue);
+    }
+
+    initialize();
+  </script>
+</body>
+</html>

@@ -53,7 +53,7 @@ class Store:
         self.db.close()
 
     def create_task(self, prompt: str, config: dict[str, Any], roles: dict[str, str] | None = None,
-                    recipient: str = "all") -> dict[str, Any]:
+                    recipient: str = "all", *, base: str | None = None, handoff: dict | None = None) -> dict[str, Any]:
         task_id = uuid.uuid4().hex[:12]
         agents = [name for name, entry in config["agents"].items() if entry["enabled"]]
         if not agents:
@@ -71,10 +71,24 @@ class Store:
                 "status": "running", "created_at": now(), "current_round": 1,
                 "max_rounds": config["collaboration"]["max_rounds"], "turn_count": 0,
                 "roles": roles, "queue": [{"agent": name, "task": prompt, "source": "human", "round": 1} for name in agents],
-                "seen_delegations": [], "git_state": {}, "artifacts": [],
+                "seen_delegations": [], "git_state": {"base": base} if base is not None else {}, "artifacts": [],
                 "budget": dict(config["limits"]["budget"]), "pause_reason": None}
-        self.save_task(task)
-        self.add_message(task_id, "human", recipient, prompt)
+        if handoff is not None:
+            self.db.execute("PRAGMA foreign_keys = ON")
+        with self.db:
+            if handoff is not None:
+                self.db.execute("BEGIN IMMEDIATE")
+                existing = self.db.execute("SELECT session_id, task_id, payload FROM chat_handoffs WHERE request_id=?",
+                                           (handoff["request_id"],)).fetchone()
+                if existing:
+                    if (existing["session_id"], existing["payload"]) != (handoff["session_id"], handoff["payload"]):
+                        raise ValueError("This request ID already belongs to a different handoff.")
+                    return {**self.get_task(existing["task_id"]), "replayed": True}
+            self._save_task(task)
+            self._add_message(task_id, "human", recipient, prompt)
+            if handoff is not None:
+                self.db.execute("INSERT INTO chat_handoffs VALUES (?, ?, ?, ?, ?)",
+                                (handoff["request_id"], handoff["session_id"], task_id, handoff["payload"], now()))
         return task
 
     def last_agent_usage(self) -> dict[str, int | None]:
@@ -106,6 +120,10 @@ class Store:
                 for row in self.db.execute("SELECT agent, snapshot FROM agent_quota")}
 
     def save_task(self, task: dict[str, Any]) -> None:
+        with self.db:
+            self._save_task(task)
+
+    def _save_task(self, task: dict[str, Any]) -> None:
         row = dict(task)
         for key in ("roles", "queue", "seen_delegations", "git_state", "artifacts", "budget"):
             row[key] = json.dumps(row[key])
@@ -117,7 +135,6 @@ class Store:
                          max_rounds=excluded.max_rounds,turn_count=excluded.turn_count,roles=excluded.roles,queue=excluded.queue,
                          seen_delegations=excluded.seen_delegations,git_state=excluded.git_state,artifacts=excluded.artifacts,
                          pause_reason=excluded.pause_reason""", row)
-        self.db.commit()
 
     def get_task(self, task_id: str) -> dict[str, Any]:
         row = self.db.execute("SELECT * FROM tasks WHERE id=?", (task_id,)).fetchone()
@@ -142,10 +159,14 @@ class Store:
 
     def add_message(self, task_id: str, sender: str, recipient: str | None, content: str,
                     delegation: dict[str, Any] | None = None, metadata: dict[str, Any] | None = None) -> None:
+        with self.db:
+            self._add_message(task_id, sender, recipient, content, delegation, metadata)
+
+    def _add_message(self, task_id: str, sender: str, recipient: str | None, content: str,
+                     delegation: dict[str, Any] | None = None, metadata: dict[str, Any] | None = None) -> None:
         self.db.execute("INSERT INTO messages VALUES (?,?,?,?,?,?,?,?)",
                         (uuid.uuid4().hex, task_id, sender, recipient, content, now(),
                          json.dumps(delegation or {}), json.dumps(metadata or {})))
-        self.db.commit()
 
     def messages(self, task_id: str) -> list[dict[str, Any]]:
         rows = self.db.execute("SELECT * FROM messages WHERE task_id=? ORDER BY timestamp,rowid", (task_id,)).fetchall()

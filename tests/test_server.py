@@ -7,12 +7,16 @@ import subprocess
 import tempfile
 import threading
 import unittest
+import uuid
+from contextlib import closing
 from pathlib import Path
 from unittest.mock import patch
 
+from ai_team.chat_store import ChatStore
 from ai_team.config import DEFAULT_CONFIG, initialize
 from ai_team.server import make_server, run_ui, running_instance
 from ai_team.store import Store
+from test_chat import KEYS, OPENAI, api_keys
 
 
 class ServerTests(unittest.TestCase):
@@ -71,6 +75,14 @@ class ServerTests(unittest.TestCase):
         status, body = self.request("GET", f"/api/tasks/{self.task['id']}/diff")
         self.assertEqual(status, 200)
         self.assertEqual(json.loads(body)["changes"], {})
+        with self.server.app.coordinator() as coordinator:
+            worktree = coordinator.git.ensure(self.task["id"], "codex")
+            (worktree / "README.md").write_text("changed in the worktree\n", encoding="utf-8")
+        status, body = self.request("GET", f"/api/tasks/{self.task['id']}/diff")
+        self.assertEqual(status, 200)
+        change = json.loads(body)["changes"]["codex"]
+        self.assertEqual(change["files"], ["README.md"])
+        self.assertIn("+changed in the worktree", change["diff"])
 
     def test_overview_reports_recorded_tokens_and_quota(self):
         store = Store(self.root / ".ai-team" / "state.sqlite3")
@@ -131,6 +143,94 @@ class ServerTests(unittest.TestCase):
         store = Store(self.root / ".ai-team" / "state.sqlite3")
         self.assertEqual(store.get_task(task_id)["original_prompt"], "Review the docs")
         store.close()
+
+    def test_handoff_requires_confirmation_and_links_approved_brief_and_saved_artifacts(self):
+        path = self.server.app.chat.path
+        with closing(ChatStore(path)) as chat, chat.db:
+            session = chat.create(**OPENAI, settings={"system_prompt": "", "max_turns": 4,
+                                                    "max_output_tokens": 4096, "timeout_seconds": 60})
+            turn = chat.add_turn(session, uuid.uuid4().hex, **OPENAI, prompt="Improve parser handling", owner="test",
+                                 context_turns=0, truncated=False)
+        with closing(ChatStore(path)) as chat:
+            chat.finish_turn(turn, response="Keep the public interface")
+        prefix = f"/api/v1/sessions/{session['id']}"
+        with (
+            patch("ai_team.server.available_agents", return_value={"codex": True, "claude": True, "gemini": True}),
+            patch.object(self.server.app, "_launch") as launch,
+        ):
+            status, data = self.request("GET", prefix + "/handoff")
+            self.assertEqual(status, 200)
+            preview = json.loads(data)
+            self.assertEqual(preview["brief"]["objective"], "Improve parser handling")
+            self.assertIn("Keep the public interface", preview["brief"]["context"])
+            payload = {"request_id": uuid.uuid4().hex, "repository": preview["repository"],
+                       "brief": {**preview["brief"], "acceptance_criteria": "Existing examples still parse"},
+                       "roles": preview["roles"], "recipient": "codex"}
+            self.assertEqual(self.request("POST", prefix + "/handoff", payload)[0], 409)
+            self.assertEqual(self.request("POST", prefix + "/handoff",
+                             {**payload, "confirmed": True, "repository": "other-repository"})[0], 409)
+            launch.assert_not_called()
+            self.assertEqual(json.loads(self.request("GET", prefix)[1])["handoffs"], [])
+            payload["confirmed"] = True
+            self.assertEqual(self.request("POST", prefix + "/handoff", payload, token=None)[0], 403)
+            status, created = self.request("POST", prefix + "/handoff", payload)
+            self.assertEqual(status, 201)
+            task_id = json.loads(created)["task_id"]
+            self.assertEqual(self.request("POST", prefix + "/handoff", payload), (201, created))
+            launch.assert_called_once_with(task_id, "resume")
+
+        detail = json.loads(self.request("GET", f"/api/tasks/{task_id}")[1])
+        self.assertEqual(detail["source"]["id"], session["id"])
+        self.assertIn("Existing examples still parse", detail["task"]["original_prompt"])
+        self.assertEqual(json.loads(self.request("GET", prefix)[1])["handoffs"][0]["task_id"], task_id)
+        with closing(Store(path)) as store:
+            task = store.get_task(task_id)
+            task["artifacts"].append({"agent": "codex", "tests": [{"command": ["pytest"], "exit_code": 0,
+                                                                  "output": "private raw test output"}]})
+            store.save_task(task)
+            store.add_message(task_id, "claude", "all", "Reviewed the boundary conditions")
+            store.record_invocation({"id": "handoff-test", "task_id": task_id, "agent": "codex",
+                                     "started_at": "2026-01-01T00:00:00Z", "duration_seconds": 1.0,
+                                     "exit_code": 0, "prompt": "", "raw_output": "private stdout", "stderr": "",
+                                     "response": json.dumps({"files_changed": ["parser.py"]}),
+                                     "diff_before": "", "diff_after": f"+{KEYS['OPENAI_API_KEY']}"})
+        self.assertEqual(self.request("GET", f"{prefix}/artifacts/{self.task['id']}")[0], 404)
+        with api_keys(KEYS):
+            status, data = self.request("GET", f"{prefix}/artifacts/{task_id}")
+        self.assertEqual(status, 200)
+        self.assertNotIn(KEYS["OPENAI_API_KEY"], data)
+        self.assertNotIn("private", data)
+        artifact = json.loads(data)
+        self.assertEqual(artifact["changes"]["codex"]["files"], ["parser.py"])
+        self.assertEqual(artifact["changes"]["codex"]["diff"], "+[API key redacted]")
+        self.assertEqual(artifact["updates"][0]["content"], "Reviewed the boundary conditions")
+        self.assertEqual(artifact["tests"][0]["exit_code"], 0)
+
+    def test_download_formats_exclude_diagnostics_unless_requested(self):
+        with closing(ChatStore(self.server.app.chat.path)) as chat, chat.db:
+            session = chat.create(**OPENAI, settings={"system_prompt": "", "max_turns": 4,
+                                                    "max_output_tokens": 4096, "timeout_seconds": 60})
+            turn = chat.add_turn(session, uuid.uuid4().hex, **OPENAI, prompt="Explain how the parser works", owner="test",
+                                 context_turns=0, truncated=False)
+        with closing(ChatStore(self.server.app.chat.path)) as chat:
+            chat.finish_turn(turn, error=f"Provider failed with {KEYS['OPENAI_API_KEY']}", total_tokens=7)
+        endpoint = f"/api/v1/sessions/{session['id']}/export"
+        self.assertEqual(self.request("GET", endpoint, token=None)[0], 403)
+        self.assertEqual(self.request("GET", endpoint, origin="http://other.invalid")[0], 403)
+        self.assertEqual(self.request("GET", endpoint + "?format=html")[0], 400)
+        status, markdown = self.request("GET", endpoint)
+        self.assertEqual(status, 200)
+        self.assertIn("## Turn 1 · You", markdown)
+        self.assertNotIn("Provider failed", markdown)
+        status, portable = self.request("GET", endpoint + "?format=json")
+        self.assertEqual(status, 200)
+        self.assertNotIn("total_tokens", json.loads(portable)["turns"][0])
+        with api_keys(KEYS):
+            status, data = self.request("GET", endpoint + "?format=json&diagnostics=1")
+        self.assertEqual(status, 200)
+        self.assertNotIn(KEYS["OPENAI_API_KEY"], data)
+        self.assertEqual(json.loads(data)["turns"][0]["total_tokens"], 7)
+        self.assertIn("Provider failed with [API key redacted]", data)
 
     def test_create_task_saves_selected_roles_and_activity_is_visible(self):
         roles = {"codex": "q&a", "claude": "implementation", "gemini": "qa"}

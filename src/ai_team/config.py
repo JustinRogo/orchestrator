@@ -39,6 +39,8 @@ DEFAULT_CONFIG: dict[str, Any] = {
     "collaboration": {"max_turns": 12, "max_rounds": 3, "allow_agent_delegation": True,
                       "recent_messages": 8, "timeout_seconds": 600},
     "limits": {"budget": {"tokens": None, "cost_usd": None}},
+    "chat": {"models": {"openai": ["gpt-6.1-terra"], "anthropic": ["claude-sonnet-4-6"],
+                        "google": ["gemini-3.5-flash-lite"]}},
     "git": {"primary_implementation_agent": "codex", "auto_merge": False},
     "execution": {"tests": [], "allowed_environment": ["PATH", "PATHEXT", "SystemRoot", "WINDIR", "TEMP", "TMP", "HOME", "USERPROFILE", "APPDATA", "LOCALAPPDATA", "CODEX_HOME", "CLAUDE_CONFIG_DIR", "GEMINI_CLI_HOME", "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "NO_PROXY", "http_proxy", "https_proxy", "all_proxy", "no_proxy", "SSL_CERT_FILE", "SSL_CERT_DIR", "REQUESTS_CA_BUNDLE", "CURL_CA_BUNDLE", "NODE_EXTRA_CA_CERTS"]},
 }
@@ -68,9 +70,11 @@ def initialize(root: Path) -> Path:
     return folder
 
 
-def load(root: Path) -> dict[str, Any]:
+def load(root: Path, *, allow_missing: bool = False) -> dict[str, Any]:
     path = team_dir(root) / "config.yaml"
     if not path.exists():
+        if allow_missing:
+            return copy.deepcopy(DEFAULT_CONFIG)
         raise ValueError("Run 'ai-team init' first.")
     data = yaml.safe_load(path.read_text(encoding="utf-8"))
     if not isinstance(data, dict):
@@ -88,6 +92,8 @@ def load(root: Path) -> dict[str, Any]:
             if set(value) != {"budget"} or not isinstance(value["budget"], dict) or set(value["budget"]) - {"tokens", "cost_usd"}:
                 raise ValueError("limits must contain a budget with tokens and/or cost_usd")
             config["limits"]["budget"].update(value["budget"])
+        elif section == "chat" and isinstance(value.get("models"), dict):
+            config["chat"]["models"].update(value["models"])
         else:
             config[section].update(value)
     if config["git"]["auto_merge"]:
